@@ -1,0 +1,7 @@
+path: /Shared/swamp-smoke-2026-05-30
+language: PYTHON
+overwrite: true
+content: |
+  # Databricks notebook source
+  print("hello from swamp")
+  dbutils.notebook.exit("ok")

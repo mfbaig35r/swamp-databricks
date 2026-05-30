@@ -1,0 +1,6 @@
+name: swamp-databricks-smoke-2026-05-30-run
+tasks:
+  - task_key: hello
+    notebook_task:
+      notebook_path: /Shared/swamp-smoke-2026-05-30
+max_concurrent_runs: 1
