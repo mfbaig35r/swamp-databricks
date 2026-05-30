@@ -1,6 +1,7 @@
 import { z } from "npm:zod@4";
 import {
   dbxFetch,
+  existsOnWorkspace,
   GlobalArgs,
   GlobalArgsSchema,
   Logger,
@@ -125,7 +126,7 @@ const LastUpdateResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/dlt_pipeline",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -469,8 +470,10 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'pipeline' resource named args.name exists, call " +
-        "PUT /api/2.0/pipelines/{id} (full replace). Otherwise POST.",
+        "Reconcile via Swamp data + workspace check: if a 'pipeline' " +
+        "resource exists for this name AND the workspace still has that " +
+        "pipeline_id, call PUT /api/2.0/pipelines/{id} (full replace). " +
+        "Otherwise create. Safe across Swamp tombstones.",
       arguments: PipelineSettings,
       execute: async (
         args: z.infer<typeof PipelineSettings>,
@@ -484,24 +487,34 @@ export const model = {
         const prior = await context.readResource(args.name);
         if (prior) {
           const pipelineId = prior.pipeline_id as string;
-          await dbxFetch(
+          const stillExists = await existsOnWorkspace(
             context.globalArgs,
             `/api/2.0/pipelines/${pipelineId}`,
-            {
-              method: "PUT",
-              body: JSON.stringify({ ...args, id: pipelineId }),
-            },
           );
-          context.logger.info(
-            "create_or_update: updated existing pipeline {pipeline_id}",
-            { pipeline_id: pipelineId },
-          );
-          const handle = await context.writeResource("pipeline", args.name, {
-            ...prior,
-            name: args.name,
-            settings_hash: await sha256(JSON.stringify(args)),
-          });
-          return { dataHandles: [handle] };
+          if (stillExists) {
+            await dbxFetch(
+              context.globalArgs,
+              `/api/2.0/pipelines/${pipelineId}`,
+              {
+                method: "PUT",
+                body: JSON.stringify({ ...args, id: pipelineId }),
+              },
+            );
+            context.logger.info(
+              "create_or_update: updated existing pipeline {pipeline_id}",
+              { pipeline_id: pipelineId },
+            );
+            const handle = await context.writeResource(
+              "pipeline",
+              args.name,
+              {
+                ...prior,
+                name: args.name,
+                settings_hash: await sha256(JSON.stringify(args)),
+              },
+            );
+            return { dataHandles: [handle] };
+          }
         }
         const out = await dbxFetch(
           context.globalArgs,

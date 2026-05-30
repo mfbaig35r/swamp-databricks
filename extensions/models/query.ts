@@ -59,7 +59,7 @@ const QueryResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/query",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {

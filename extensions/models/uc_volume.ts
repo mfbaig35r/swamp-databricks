@@ -1,6 +1,7 @@
 import { z } from "npm:zod@4";
 import {
   dbxFetch,
+  existsOnWorkspace,
   GlobalArgs,
   GlobalArgsSchema,
   Logger,
@@ -57,7 +58,7 @@ const VolumeResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_volume",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -252,34 +253,45 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'volume' resource named args.name exists, call " +
-        "PATCH on the new_name field only (UC volume PATCH does not accept " +
-        "volume_type or storage_location changes); otherwise call POST.",
+        "Reconcile against the workspace: GET the volume first; if it " +
+        "exists call PATCH (comment only - UC volume PATCH does not accept " +
+        "volume_type / storage_location changes), otherwise POST. Safe " +
+        "across Swamp tombstones.",
       arguments: CreateArgs,
       execute: async (
         args: z.infer<typeof CreateArgs>,
         context: {
           globalArgs: GlobalArgs;
-          readResource: ReadResource;
           writeResource: WriteResource;
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.name);
-        if (prior) {
+        const fullName =
+          `${args.catalog_name}.${args.schema_name}.${args.name}`;
+        const exists = await existsOnWorkspace(
+          context.globalArgs,
+          `/api/2.1/unity-catalog/volumes/${fullName}`,
+        );
+        if (exists) {
           const patch: Record<string, unknown> = {};
           if (args.comment !== undefined) patch.comment = args.comment;
           await dbxFetch(
             context.globalArgs,
-            `/api/2.1/unity-catalog/volumes/${prior.full_name}`,
+            `/api/2.1/unity-catalog/volumes/${fullName}`,
             { method: "PATCH", body: JSON.stringify(patch) },
           );
           context.logger.info(
             "create_or_update: patched existing volume {full_name}",
-            { full_name: prior.full_name },
+            { full_name: fullName },
           );
           const handle = await context.writeResource("volume", args.name, {
-            ...prior,
+            full_name: fullName,
+            name: args.name,
+            catalog_name: args.catalog_name,
+            schema_name: args.schema_name,
+            volume_type: args.volume_type,
+            created_time_ms: Date.now(),
+            workspace_url: context.globalArgs.workspace_url,
           });
           return { dataHandles: [handle] };
         }
@@ -288,13 +300,13 @@ export const model = {
           "/api/2.1/unity-catalog/volumes",
           { method: "POST", body: JSON.stringify(args) },
         );
-        const fullName = out.full_name as string;
+        const createdFullName = out.full_name as string;
         context.logger.info(
           "create_or_update: created new volume {full_name}",
-          { full_name: fullName },
+          { full_name: createdFullName },
         );
         const handle = await context.writeResource("volume", args.name, {
-          full_name: fullName,
+          full_name: createdFullName,
           name: args.name,
           catalog_name: args.catalog_name,
           schema_name: args.schema_name,

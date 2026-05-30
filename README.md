@@ -179,11 +179,12 @@ keyed by `args.name` exists, take the update path; otherwise create.
 Available on: `job`, `dlt_pipeline`, `sql_warehouse`, `secret_scope`,
 `uc_catalog`, `uc_schema`, `uc_volume`.
 
-**Caveat:** the check reads Swamp's data layer, not the workspace.
-After calling `delete`, the resource is tombstoned in Swamp, so a
-subsequent `create_or_update` with the same name will hit the update
-path against a workspace resource that no longer exists and fail.
-For delete‑then‑recreate flows, call `create` explicitly.
+As of v0.11, `create_or_update` reconciles against the **workspace**,
+not Swamp's data layer. Each method does a workspace GET (or list, for
+secret scopes) before deciding which path to take, so delete‑then‑
+`create_or_update` correctly takes the create path. Also handles out‑
+of‑band workspace deletes (UI delete → Swamp `create_or_update`
+correctly recreates).
 
 ### `@mfbaig35r/databricks/workspace_file`
 

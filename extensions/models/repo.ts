@@ -87,7 +87,7 @@ const RepoResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/repo",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {

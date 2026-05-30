@@ -40,7 +40,7 @@ const ScopeResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/secret_scope",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -109,27 +109,37 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'scope' resource named args.scope exists in " +
-        "Swamp's data layer, no-op (Databricks scopes do not support edit). " +
-        "Otherwise create. Useful for idempotent workflows.",
+        "Reconcile against the workspace: list scopes; if args.scope is " +
+        "present no-op (Databricks scopes have no edit endpoint). Otherwise " +
+        "create. Safe across Swamp tombstones.",
       arguments: ScopeSettings,
       execute: async (
         args: z.infer<typeof ScopeSettings>,
         context: {
           globalArgs: GlobalArgs;
-          readResource: ReadResource;
           writeResource: WriteResource;
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.scope);
-        if (prior) {
+        const list = await dbxFetch(
+          context.globalArgs,
+          "/api/2.0/secrets/scopes/list",
+        );
+        const scopes = (list.scopes ?? []) as Array<{
+          name: string;
+          backend_type: string;
+        }>;
+        const found = scopes.find((s) => s.name === args.scope);
+        if (found) {
           context.logger.info(
             "create_or_update: secret scope {scope} already exists, no-op",
             { scope: args.scope },
           );
           const handle = await context.writeResource("scope", args.scope, {
-            ...prior,
+            scope: args.scope,
+            backend_type: found.backend_type,
+            created_time_ms: Date.now(),
+            workspace_url: context.globalArgs.workspace_url,
           });
           return { dataHandles: [handle] };
         }

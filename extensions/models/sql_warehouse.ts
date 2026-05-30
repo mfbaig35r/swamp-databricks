@@ -1,6 +1,7 @@
 import { z } from "npm:zod@4";
 import {
   dbxFetch,
+  existsOnWorkspace,
   GlobalArgs,
   GlobalArgsSchema,
   Logger,
@@ -119,7 +120,7 @@ const LastStatementResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/sql_warehouse",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -591,9 +592,10 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'warehouse' resource named args.name exists, call " +
-        "POST /api/2.0/sql/warehouses/{id}/edit (full replace). Otherwise " +
-        "POST /api/2.0/sql/warehouses.",
+        "Reconcile via Swamp data + workspace check: if a 'warehouse' " +
+        "resource exists for this name AND the workspace still has that " +
+        "warehouse_id, call /edit. Otherwise create. Safe across Swamp " +
+        "tombstones.",
       arguments: WarehouseSettings,
       execute: async (
         args: z.infer<typeof WarehouseSettings>,
@@ -607,24 +609,34 @@ export const model = {
         const prior = await context.readResource(args.name);
         if (prior) {
           const warehouseId = prior.warehouse_id as string;
-          await dbxFetch(
+          const stillExists = await existsOnWorkspace(
             context.globalArgs,
-            `/api/2.0/sql/warehouses/${warehouseId}/edit`,
-            { method: "POST", body: JSON.stringify(args) },
+            `/api/2.0/sql/warehouses/${warehouseId}`,
           );
-          context.logger.info(
-            "create_or_update: edited existing warehouse {warehouse_id}",
-            { warehouse_id: warehouseId },
-          );
-          const handle = await context.writeResource("warehouse", args.name, {
-            ...prior,
-            name: args.name,
-            cluster_size: args.cluster_size,
-            enable_serverless_compute: args.enable_serverless_compute,
-            warehouse_type: args.warehouse_type,
-            settings_hash: await sha256(JSON.stringify(args)),
-          });
-          return { dataHandles: [handle] };
+          if (stillExists) {
+            await dbxFetch(
+              context.globalArgs,
+              `/api/2.0/sql/warehouses/${warehouseId}/edit`,
+              { method: "POST", body: JSON.stringify(args) },
+            );
+            context.logger.info(
+              "create_or_update: edited existing warehouse {warehouse_id}",
+              { warehouse_id: warehouseId },
+            );
+            const handle = await context.writeResource(
+              "warehouse",
+              args.name,
+              {
+                ...prior,
+                name: args.name,
+                cluster_size: args.cluster_size,
+                enable_serverless_compute: args.enable_serverless_compute,
+                warehouse_type: args.warehouse_type,
+                settings_hash: await sha256(JSON.stringify(args)),
+              },
+            );
+            return { dataHandles: [handle] };
+          }
         }
         const out = await dbxFetch(
           context.globalArgs,

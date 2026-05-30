@@ -97,6 +97,31 @@ export async function dbxFetch(
   return await res.json() as Record<string, unknown>;
 }
 
+/**
+ * GET a Databricks path. Returns true on 2xx, false on 404 / DOES_NOT_EXIST,
+ * throws on any other failure. Used by create_or_update to reconcile against
+ * the workspace and avoid mistaking Swamp tombstones for live resources.
+ */
+export async function existsOnWorkspace(
+  globalArgs: GlobalArgs,
+  path: string,
+): Promise<boolean> {
+  try {
+    await dbxFetch(globalArgs, path);
+    return true;
+  } catch (err) {
+    const msg = String(err);
+    if (
+      msg.includes(" 404:") ||
+      msg.includes("DOES_NOT_EXIST") ||
+      msg.includes("does not exist")
+    ) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Small helpers used by multiple models
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import { z } from "npm:zod@4";
 import {
   dbxFetch,
+  existsOnWorkspace,
   GlobalArgs,
   GlobalArgsSchema,
   Logger,
@@ -48,7 +49,7 @@ const SchemaResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_schema",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -234,34 +235,43 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'schema' resource named args.name exists in " +
-        "Swamp's data layer, call PATCH; otherwise call POST.",
+        "Reconcile against the workspace: GET the schema first; if it " +
+        "exists call PATCH, otherwise POST. Safe across Swamp tombstones " +
+        "(delete + create_or_update with the same name will correctly " +
+        "create rather than try to PATCH a missing schema).",
       arguments: CreateArgs,
       execute: async (
         args: z.infer<typeof CreateArgs>,
         context: {
           globalArgs: GlobalArgs;
-          readResource: ReadResource;
           writeResource: WriteResource;
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.name);
-        if (prior) {
+        const fullName = `${args.catalog_name}.${args.name}`;
+        const exists = await existsOnWorkspace(
+          context.globalArgs,
+          `/api/2.1/unity-catalog/schemas/${fullName}`,
+        );
+        if (exists) {
           const patch: Record<string, unknown> = {};
           if (args.comment !== undefined) patch.comment = args.comment;
           if (args.properties) patch.properties = args.properties;
           await dbxFetch(
             context.globalArgs,
-            `/api/2.1/unity-catalog/schemas/${prior.full_name}`,
+            `/api/2.1/unity-catalog/schemas/${fullName}`,
             { method: "PATCH", body: JSON.stringify(patch) },
           );
           context.logger.info(
             "create_or_update: patched existing schema {full_name}",
-            { full_name: prior.full_name },
+            { full_name: fullName },
           );
           const handle = await context.writeResource("schema", args.name, {
-            ...prior,
+            full_name: fullName,
+            name: args.name,
+            catalog_name: args.catalog_name,
+            created_time_ms: Date.now(),
+            workspace_url: context.globalArgs.workspace_url,
           });
           return { dataHandles: [handle] };
         }
@@ -270,13 +280,13 @@ export const model = {
           "/api/2.1/unity-catalog/schemas",
           { method: "POST", body: JSON.stringify(args) },
         );
-        const fullName = out.full_name as string;
+        const createdFullName = out.full_name as string;
         context.logger.info(
           "create_or_update: created new schema {full_name}",
-          { full_name: fullName },
+          { full_name: createdFullName },
         );
         const handle = await context.writeResource("schema", args.name, {
-          full_name: fullName,
+          full_name: createdFullName,
           name: args.name,
           catalog_name: args.catalog_name,
           owner: out.owner as string | undefined,

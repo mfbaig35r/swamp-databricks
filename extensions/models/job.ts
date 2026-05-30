@@ -1,6 +1,7 @@
 import { z } from "npm:zod@4";
 import {
   dbxFetch,
+  existsOnWorkspace,
   GlobalArgs,
   GlobalArgsSchema,
   Logger,
@@ -261,7 +262,7 @@ const LastRunResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/job",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -565,8 +566,10 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'job' resource named args.name exists, call " +
-        "POST /api/2.2/jobs/reset (full replace). Otherwise POST /jobs/create.",
+        "Reconcile via Swamp data + workspace check: if a 'job' resource " +
+        "exists for this name AND the workspace still has that job_id, " +
+        "call POST /api/2.2/jobs/reset (full replace). Otherwise create. " +
+        "Safe across Swamp tombstones and out-of-band workspace deletes.",
       arguments: JobSettings,
       execute: async (
         args: z.infer<typeof JobSettings>,
@@ -580,24 +583,30 @@ export const model = {
         const prior = await context.readResource(args.name);
         if (prior) {
           const jobId = prior.job_id as number;
-          await dbxFetch(
+          const stillExists = await existsOnWorkspace(
             context.globalArgs,
-            "/api/2.2/jobs/reset",
-            {
-              method: "POST",
-              body: JSON.stringify({ job_id: jobId, new_settings: args }),
-            },
+            `/api/2.2/jobs/get?job_id=${jobId}`,
           );
-          context.logger.info(
-            "create_or_update: reset existing job {job_id}",
-            { job_id: jobId },
-          );
-          const handle = await context.writeResource("job", args.name, {
-            ...prior,
-            name: args.name,
-            settings_hash: await sha256(JSON.stringify(args)),
-          });
-          return { dataHandles: [handle] };
+          if (stillExists) {
+            await dbxFetch(
+              context.globalArgs,
+              "/api/2.2/jobs/reset",
+              {
+                method: "POST",
+                body: JSON.stringify({ job_id: jobId, new_settings: args }),
+              },
+            );
+            context.logger.info(
+              "create_or_update: reset existing job {job_id}",
+              { job_id: jobId },
+            );
+            const handle = await context.writeResource("job", args.name, {
+              ...prior,
+              name: args.name,
+              settings_hash: await sha256(JSON.stringify(args)),
+            });
+            return { dataHandles: [handle] };
+          }
         }
         const out = await dbxFetch(
           context.globalArgs,

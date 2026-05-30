@@ -1,6 +1,7 @@
 import { z } from "npm:zod@4";
 import {
   dbxFetch,
+  existsOnWorkspace,
   GlobalArgs,
   GlobalArgsSchema,
   Logger,
@@ -45,7 +46,7 @@ const CatalogResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_catalog",
-  version: "2026.05.30.10",
+  version: "2026.05.30.11",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -214,27 +215,28 @@ export const model = {
 
     create_or_update: {
       description:
-        "Reconcile: if a 'catalog' resource named args.name exists in " +
-        "Swamp's data layer, call PATCH; otherwise call POST. Returns the " +
-        "same resource shape as create.",
+        "Reconcile against the workspace: GET the catalog first; if it " +
+        "exists call PATCH, otherwise POST. Safe across Swamp tombstones.",
       arguments: CreateArgs,
       execute: async (
         args: z.infer<typeof CreateArgs>,
         context: {
           globalArgs: GlobalArgs;
-          readResource: ReadResource;
           writeResource: WriteResource;
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.name);
-        if (prior) {
+        const exists = await existsOnWorkspace(
+          context.globalArgs,
+          `/api/2.1/unity-catalog/catalogs/${args.name}`,
+        );
+        if (exists) {
           const patch: Record<string, unknown> = {};
           if (args.comment !== undefined) patch.comment = args.comment;
           if (args.properties) patch.properties = args.properties;
           await dbxFetch(
             context.globalArgs,
-            `/api/2.1/unity-catalog/catalogs/${prior.name}`,
+            `/api/2.1/unity-catalog/catalogs/${args.name}`,
             { method: "PATCH", body: JSON.stringify(patch) },
           );
           context.logger.info(
@@ -242,10 +244,10 @@ export const model = {
             { name: args.name },
           );
           const handle = await context.writeResource("catalog", args.name, {
-            ...prior,
-            comment: args.comment !== undefined
-              ? args.comment
-              : prior.comment as string | undefined,
+            name: args.name,
+            comment: args.comment,
+            created_time_ms: Date.now(),
+            workspace_url: context.globalArgs.workspace_url,
           });
           return { dataHandles: [handle] };
         }
