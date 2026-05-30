@@ -1,10 +1,10 @@
-# @fbaig/databricks
+# @mfbaig35r/databricks
 
 Databricks Jobs, DLT pipelines, and Unity Catalog resources as Swamp models.
 Compose Databricks pipelines with non-Databricks resources (S3 datastores,
 Postgres tables, secrets vaults, Cloudflare modules) in a single Swamp workflow.
 
-This first release ships the `@fbaig/databricks/job` model, covering the
+This first release ships the `@mfbaig35r/databricks/job` model, covering the
 Databricks Jobs API 2.2 surface: create, read, update (full reset), delete,
 trigger a run, wait for terminal state, and cancel a run.
 
@@ -19,7 +19,7 @@ automation framework.
 ## Install
 
 ```sh
-swamp extension pull @fbaig/databricks
+swamp extension pull @mfbaig35r/databricks
 ```
 
 Then reference it from a workflow or model in your Swamp repo. Configure the
@@ -58,7 +58,7 @@ swamp vault set databricks/pat
 name: nightly-ingest
 steps:
   - id: define_job
-    model: "@fbaig/databricks/job"
+    model: "@mfbaig35r/databricks/job"
     method: create
     arguments:
       name: nightly-ingest
@@ -74,12 +74,12 @@ steps:
             node_type_id: i3.xlarge
             num_workers: 2
   - id: trigger
-    model: "@fbaig/databricks/job"
+    model: "@mfbaig35r/databricks/job"
     method: run
     arguments:
       job_ref: nightly-ingest
   - id: wait
-    model: "@fbaig/databricks/job"
+    model: "@mfbaig35r/databricks/job"
     method: wait_run
     arguments:
       run_id: ${{ steps.trigger.outputs.run_id }}
@@ -107,12 +107,12 @@ subsequent releases as their schemas stabilize.
 
 ## Roadmap
 
-- `@fbaig/databricks/dlt_pipeline`: Delta Live Tables pipelines as a first-class
+- `@mfbaig35r/databricks/dlt_pipeline`: Delta Live Tables pipelines as a first-class
   model.
-- `@fbaig/databricks/uc_schema`, `uc_table`, `uc_volume`: Unity Catalog
+- `@mfbaig35r/databricks/uc_schema`, `uc_table`, `uc_volume`: Unity Catalog
   resources.
-- `@fbaig/databricks/secret_scope`, `secret`: Secrets API.
-- `@fbaig/databricks/sql_warehouse`: SQL Warehouses for DBSQL tasks.
+- `@mfbaig35r/databricks/secret_scope`, `secret`: Secrets API.
+- `@mfbaig35r/databricks/sql_warehouse`: SQL Warehouses for DBSQL tasks.
 - Expand task discriminated union to the full Jobs API surface.
 
 ## License

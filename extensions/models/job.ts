@@ -215,7 +215,7 @@ async function resolveToken(globalArgs: GlobalArgs): Promise<string> {
     }
     case "azure_msi":
       throw new Error(
-        "azure_msi auth is not implemented in @fbaig/databricks/job v1",
+        "azure_msi auth is not implemented in @mfbaig35r/databricks/job v1",
       );
   }
 }
@@ -247,7 +247,7 @@ async function dbxFetch(
 // ---------------------------------------------------------------------------
 
 /**
- * `@fbaig/databricks/job`: Databricks Jobs API 2.2 lifecycle as a Swamp model.
+ * `@mfbaig35r/databricks/job`: Databricks Jobs API 2.2 lifecycle as a Swamp model.
  *
  * Methods cover create, read, update (full reset via `/jobs/reset`), delete,
  * `run` (fire-and-forget `/jobs/run-now`), `wait_run` (poll until terminal),
@@ -261,7 +261,7 @@ async function dbxFetch(
  * @see https://docs.databricks.com/api/workspace/jobs
  */
 export const model = {
-  type: "@fbaig/databricks/job",
+  type: "@mfbaig35r/databricks/job",
   version: "2026.05.30.1",
   globalArguments: GlobalArgsSchema,
 
@@ -282,7 +282,7 @@ export const model = {
       description:
         "A workspace notebook uploaded via this model, keyed by absolute path. " +
         "Convenience surface for end-to-end smoke testing; will split into " +
-        "@fbaig/databricks/notebook in a future release.",
+        "@mfbaig35r/databricks/notebook in a future release.",
       schema: NotebookResourceSchema,
       lifetime: "infinite" as const,
       garbageCollection: 5,
