@@ -50,7 +50,13 @@ Databricks Jobs API 2.2 lifecycle.
 | `wait_run`   | polls `GET /api/2.2/jobs/runs/get`    |
 | `cancel_run` | `POST /api/2.2/jobs/runs/cancel`      |
 
-Task types validated by Zod in v0.2: `notebook_task`, `sql_task`, `pipeline_task`.
+Task types validated by Zod in v0.5: `notebook_task`, `sql_task` (with
+query / file / dashboard / alert variants), `pipeline_task`,
+`spark_python_task`, `spark_jar_task`, `python_wheel_task`, `dbt_task`,
+`run_job_task`, `condition_task`, `for_each_task` (recursive). End-to-end
+workspace validation covers `notebook_task`; others ship as schema-only
+because they need compute or dependencies the smoke test environment
+does not have.
 
 ### `@mfbaig35r/databricks/notebook`
 

@@ -1,0 +1,6 @@
+path: /Shared/swamp-sql-task-smoke.sql
+language: SQL
+overwrite: true
+content: |
+  -- Databricks notebook source
+  SELECT 1 AS hello, current_timestamp() AS ts

@@ -10,7 +10,11 @@ import {
 } from "./_lib/databricks.ts";
 
 // ---------------------------------------------------------------------------
-// Task schemas (v0.2: notebook, sql, pipeline; others not yet validated)
+// Task schemas (v0.5: full Jobs API 2.2 task-body coverage minus
+// spark_submit_task and clean_rooms_notebook_task).
+// Schema accepted by Databricks for all 10 types; end-to-end smoke validation
+// in this repo covers notebook_task only. Workflows using other task types
+// will validate against the Zod schema before reaching the API.
 // ---------------------------------------------------------------------------
 
 const NotebookTask = z.object({
@@ -25,7 +29,24 @@ const SqlQueryTask = z.object({
   query: z.object({ query_id: z.string() }).optional(),
   file: z.object({
     path: z.string(),
-    source: z.string().optional(),
+    source: z.enum(["WORKSPACE", "GIT"]).optional(),
+  }).optional(),
+  dashboard: z.object({
+    dashboard_id: z.string(),
+    subscriptions: z.array(z.object({
+      user_name: z.string().optional(),
+      destination_id: z.string().optional(),
+    })).optional(),
+    custom_subject: z.string().optional(),
+    pause_subscriptions: z.boolean().optional(),
+  }).optional(),
+  alert: z.object({
+    alert_id: z.string(),
+    subscriptions: z.array(z.object({
+      user_name: z.string().optional(),
+      destination_id: z.string().optional(),
+    })).optional(),
+    pause_subscriptions: z.boolean().optional(),
   }).optional(),
   parameters: z.record(z.string(), z.string()).optional(),
 });
@@ -35,24 +56,128 @@ const PipelineTask = z.object({
   full_refresh: z.boolean().optional(),
 });
 
-const Task = z.object({
-  task_key: z.string().regex(/^[a-zA-Z0-9_-]+$/),
-  description: z.string().optional(),
-  depends_on: z.array(z.object({ task_key: z.string() })).optional(),
-  job_cluster_key: z.string().optional(),
-  existing_cluster_id: z.string().optional(),
-  timeout_seconds: z.number().int().nonnegative().optional(),
-  max_retries: z.number().int().nonnegative().optional(),
-  notebook_task: NotebookTask.optional(),
-  sql_task: SqlQueryTask.optional(),
-  pipeline_task: PipelineTask.optional(),
-}).refine(
-  (t) =>
-    [t.notebook_task, t.sql_task, t.pipeline_task].filter(Boolean).length === 1,
-  {
-    message:
-      "exactly one task body required (notebook_task, sql_task, or pipeline_task)",
-  },
+const SparkPythonTask = z.object({
+  python_file: z.string().describe(
+    "Path to .py file (workspace path, dbfs URI, S3 URI, or git repo file)",
+  ),
+  parameters: z.array(z.string()).optional().describe("Command-line arguments"),
+  source: z.enum(["WORKSPACE", "GIT"]).optional(),
+});
+
+const SparkJarTask = z.object({
+  main_class_name: z.string(),
+  parameters: z.array(z.string()).optional(),
+  run_as_repl: z.boolean().optional(),
+});
+
+const PythonWheelTask = z.object({
+  package_name: z.string(),
+  entry_point: z.string(),
+  parameters: z.array(z.string()).optional().describe("Positional arguments"),
+  named_parameters: z.record(z.string(), z.string()).optional().describe(
+    "Keyword arguments",
+  ),
+});
+
+const DbtTask = z.object({
+  commands: z.array(z.string()).min(1).max(10).describe(
+    "Up to 10 dbt CLI commands run sequentially (e.g. ['dbt deps', 'dbt run'])",
+  ),
+  warehouse_id: z.string().describe(
+    "SQL Warehouse the dbt CLI connects through",
+  ),
+  project_directory: z.string().optional(),
+  profiles_directory: z.string().optional(),
+  schema: z.string().optional(),
+  catalog: z.string().optional(),
+  source: z.enum(["WORKSPACE", "GIT"]).optional(),
+});
+
+const RunJobTask = z.object({
+  job_id: z.number().int(),
+  job_parameters: z.record(z.string(), z.string()).optional(),
+});
+
+const ConditionTask = z.object({
+  op: z.enum([
+    "EQUAL_TO",
+    "GREATER_THAN",
+    "GREATER_THAN_OR_EQUAL",
+    "LESS_THAN",
+    "LESS_THAN_OR_EQUAL",
+    "NOT_EQUAL",
+  ]),
+  left: z.string(),
+  right: z.string(),
+});
+
+const TASK_BODY_KEYS = [
+  "notebook_task",
+  "sql_task",
+  "pipeline_task",
+  "spark_python_task",
+  "spark_jar_task",
+  "python_wheel_task",
+  "dbt_task",
+  "run_job_task",
+  "condition_task",
+  "for_each_task",
+] as const;
+
+// `for_each_task` nests a Task (the task to run for each input). Zod's
+// recursive types use z.lazy. We declare the type explicitly so TS can resolve
+// the cycle.
+type TaskShape = {
+  task_key: string;
+  description?: string;
+  depends_on?: Array<{ task_key: string }>;
+  job_cluster_key?: string;
+  existing_cluster_id?: string;
+  timeout_seconds?: number;
+  max_retries?: number;
+  notebook_task?: z.infer<typeof NotebookTask>;
+  sql_task?: z.infer<typeof SqlQueryTask>;
+  pipeline_task?: z.infer<typeof PipelineTask>;
+  spark_python_task?: z.infer<typeof SparkPythonTask>;
+  spark_jar_task?: z.infer<typeof SparkJarTask>;
+  python_wheel_task?: z.infer<typeof PythonWheelTask>;
+  dbt_task?: z.infer<typeof DbtTask>;
+  run_job_task?: z.infer<typeof RunJobTask>;
+  condition_task?: z.infer<typeof ConditionTask>;
+  for_each_task?: { inputs: string; concurrency?: number; task: TaskShape };
+};
+
+const Task: z.ZodType<TaskShape> = z.lazy(() =>
+  z.object({
+    task_key: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    description: z.string().optional(),
+    depends_on: z.array(z.object({ task_key: z.string() })).optional(),
+    job_cluster_key: z.string().optional(),
+    existing_cluster_id: z.string().optional(),
+    timeout_seconds: z.number().int().nonnegative().optional(),
+    max_retries: z.number().int().nonnegative().optional(),
+    notebook_task: NotebookTask.optional(),
+    sql_task: SqlQueryTask.optional(),
+    pipeline_task: PipelineTask.optional(),
+    spark_python_task: SparkPythonTask.optional(),
+    spark_jar_task: SparkJarTask.optional(),
+    python_wheel_task: PythonWheelTask.optional(),
+    dbt_task: DbtTask.optional(),
+    run_job_task: RunJobTask.optional(),
+    condition_task: ConditionTask.optional(),
+    for_each_task: z.object({
+      inputs: z.string().describe(
+        "JSON array literal OR JSONPath into a task output",
+      ),
+      concurrency: z.number().int().positive().optional(),
+      task: Task,
+    }).optional(),
+  }).refine(
+    (t) => TASK_BODY_KEYS.filter((k) => t[k] !== undefined).length === 1,
+    {
+      message: "exactly one task body required: " + TASK_BODY_KEYS.join(", "),
+    },
+  )
 );
 
 const JobCluster = z.object({
@@ -136,7 +261,7 @@ const LastRunResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/job",
-  version: "2026.05.30.4",
+  version: "2026.05.30.5",
   globalArguments: GlobalArgsSchema,
 
   resources: {
