@@ -108,6 +108,38 @@ that read/write into UC.
 `sql_warehouse.run_query` or a job notebook task with
 `CREATE TABLE` SQL, then `uc_table.read` captures the table snapshot.
 
+### `@mfbaig35r/databricks/workspace_permissions` + `uc_permissions`
+
+Workspace and Unity Catalog ACLs as Swamp models. Workspace permissions
+use a full‑replace (`set`) and additive (`update`) PATCH model on
+`(object_type, object_id)` pairs. UC permissions use a changes‑style
+PATCH (add/remove privileges per principal) on
+`(securable_type, full_name)` pairs.
+
+| Model + method                       | API call                                                  |
+|--------------------------------------|-----------------------------------------------------------|
+| `workspace_permissions.get`          | `GET /api/2.0/permissions/{type}/{id}`                    |
+| `workspace_permissions.set`          | `PUT /api/2.0/permissions/{type}/{id}` (full replace ACL) |
+| `workspace_permissions.update`       | `PATCH /api/2.0/permissions/{type}/{id}` (additive)       |
+| `workspace_permissions.list_levels`  | `GET /api/2.0/permissions/{type}/{id}/permissionLevels`   |
+| `uc_permissions.get`                 | `GET /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
+| `uc_permissions.get_effective`       | `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}` (direct + inherited) |
+| `uc_permissions.update`              | `PATCH /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
+
+Workspace `object_type` enum: `jobs`, `pipelines`, `sql/warehouses`,
+`clusters`, `cluster-policies`, `instance-pools`, `notebooks`,
+`directories`, `serving-endpoints`, `experiments`, `registered-models`,
+`tokens`, `passwords`, `repos`, `dashboards`, `queries`, `alerts`,
+`genie`, `dbsql-dashboards`, `apps`, `vector-search-endpoints`.
+
+UC `securable_type` enum: `catalog`, `schema`, `table`, `volume`,
+`function`, `external_location`, `storage_credential`, `metastore`,
+`connection`, `provider`, `share`, `recipient`, `clean_room`, `model`,
+`service_credential`.
+
+`set` and `update` write a `permissions` (or `uc_permissions`) resource
+recording what was last applied. `get` does not.
+
 ### Idempotent `create_or_update`
 
 Most resource-managing models expose a `create_or_update` method

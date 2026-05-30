@@ -1,0 +1,6 @@
+name: swamp-perms-smoke
+tasks:
+  - task_key: noop
+    notebook_task:
+      notebook_path: /placeholder/will-not-run
+max_concurrent_runs: 1

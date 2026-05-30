@@ -57,7 +57,7 @@ const VolumeResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_volume",
-  version: "2026.05.30.8",
+  version: "2026.05.30.9",
   globalArguments: GlobalArgsSchema,
 
   resources: {
