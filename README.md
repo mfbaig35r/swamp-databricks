@@ -108,6 +108,37 @@ that read/write into UC.
 `sql_warehouse.run_query` or a job notebook task with
 `CREATE TABLE` SQL, then `uc_table.read` captures the table snapshot.
 
+### `@mfbaig35r/databricks/query`
+
+DBSQL saved queries. The `query_id` returned here is the same identifier
+the `job` model's `sql_task.query.query_id` field references.
+
+| Method   | API call                                |
+|----------|-----------------------------------------|
+| `create` | `POST /api/2.0/sql/queries`             |
+| `read`   | `GET /api/2.0/sql/queries/{query_id}`   |
+| `update` | `POST /api/2.0/sql/queries/{query_id}`  |
+| `delete` | `DELETE /api/2.0/sql/queries/{query_id}` |
+| `list`   | `GET /api/2.0/sql/queries`              |
+
+### `@mfbaig35r/databricks/repo`
+
+Databricks Git Repos. Real jobs typically reference notebooks via repo
+paths (`notebook_task.notebook_path: /Repos/me/my-project/etl`) rather
+than uploading to `/Shared/`.
+
+| Method   | API call                                              |
+|----------|-------------------------------------------------------|
+| `create` | `POST /api/2.0/repos`                                 |
+| `read`   | `GET /api/2.0/repos/{repo_id}`                        |
+| `update` | `PATCH /api/2.0/repos/{repo_id}` (switch branch/tag)  |
+| `pull`   | `PATCH /api/2.0/repos/{repo_id}` (re-sends current branch) |
+| `delete` | `DELETE /api/2.0/repos/{repo_id}`                     |
+| `list`   | `GET /api/2.0/repos`                                  |
+
+Private repos need a workspace‑level Git credential configured (Settings
+→ User Settings → Linked Accounts). Public repos work without setup.
+
 ### `@mfbaig35r/databricks/workspace_permissions` + `uc_permissions`
 
 Workspace and Unity Catalog ACLs as Swamp models. Workspace permissions

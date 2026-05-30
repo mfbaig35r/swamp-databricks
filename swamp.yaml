@@ -1,7 +1,7 @@
 manifestVersion: 1
 name: "@mfbaig35r/databricks"
-version: "2026.05.30.9"
-description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks and files, secrets, Unity Catalog (catalogs/schemas/tables/volumes), and permissions (workspace + UC) as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
+version: "2026.05.30.10"
+description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks/files, secrets, Unity Catalog, permissions, DBSQL queries, and Git Repos as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
 repository: "https://github.com/mfbaig35r/swamp-databricks"
 labels:
   - databricks
@@ -12,6 +12,7 @@ labels:
   - unity-catalog
   - secrets
   - permissions
+  - git-repos
 platforms:
   - linux-x86_64
   - linux-aarch64
@@ -31,45 +32,37 @@ models:
   - uc_volume.ts
   - workspace_permissions.ts
   - uc_permissions.ts
+  - query.ts
+  - repo.ts
 additionalFiles:
   - README.md
   - LICENSE.txt
 releaseNotes: |
-  v0.9 (2026.05.30.9) - Phase 2 (permissions)
+  v0.10 (2026.05.30.10) - Phase 3 (query + repo)
 
-  Phase 1 (uc_catalog + idempotency):
-  - New model: @mfbaig35r/databricks/uc_catalog (create, read, update,
-    delete, list, create_or_update). Completes the UC top-down tree.
-  - New `create_or_update` method on: job, dlt_pipeline, sql_warehouse,
-    secret_scope, uc_catalog, uc_schema, uc_volume. Reconcile semantics
-    via Swamp data layer.
+  Two new models close the last two critical gaps from the v0.7 review:
 
-  Phase 2 (permissions):
-  - New model: @mfbaig35r/databricks/workspace_permissions
-    (get, set, update, list_levels). Workspace-level ACLs for jobs,
-    pipelines, warehouses, notebooks, repos, queries, dashboards,
-    alerts, experiments, registered-models, serving-endpoints,
-    clusters, cluster-policies, instance-pools.
-  - New model: @mfbaig35r/databricks/uc_permissions
-    (get, get_effective, update). UC grants on catalogs, schemas,
-    tables, volumes, functions, external_locations, storage_credentials,
-    models. Changes-style PATCH (add/remove per principal).
+  - @mfbaig35r/databricks/query (create, read, update, delete, list)
+    Manages DBSQL saved queries via /api/2.0/sql/queries. The
+    query_id that this model returns pairs with the job model's
+    sql_task.query.query_id field.
 
-  Smoke validated end-to-end on Free serverless:
-  - uc_schema.create_or_update fresh create + same-call patch
-  - workspace_permissions.list_levels (5 levels for sql/warehouses),
-    get on Starter Warehouse, update to grant CAN_VIEW on a job to
-    `users` group
-  - uc_permissions.get on workspace catalog, update to grant
-    USE_SCHEMA on a smoke schema to `account users`, verify
+  - @mfbaig35r/databricks/repo (create, read, update, pull, delete, list)
+    Manages Databricks Git Repos via /api/2.0/repos. Real Databricks
+    jobs reference notebooks via repo paths rather than uploading to
+    /Shared/. `pull` re-sends the stored branch in the PATCH body
+    (Databricks rejects empty-body PATCH).
 
-  Tombstone caveat (Phase 1): create_or_update checks Swamp data layer
-  not workspace. After delete, the resource is tombstoned and
-  create_or_update will mistakenly take the update path. Use create()
-  explicitly for delete-then-recreate flows. v0.9 candidate fix:
-  workspace-first lookup.
+  Smoke validated end-to-end on Databricks Free serverless:
+  - query: list (empty), create with SELECT 1 on Starter warehouse,
+    read, list (1 visible), delete
+  - repo: create against github.com/mfbaig35r/swamp-databricks (public,
+    no Git PAT setup required), read, pull (after fix), delete
 
-  uc_catalog.create requires storage_root on Free (no default
-  metastore storage); ships as schema-validated only.
+  No breaking changes from v0.9.
 
-  No breaking changes from v0.7.
+  Total models: 15. End-to-end smoke validated since v0.1:
+  job, notebook, dlt_pipeline, sql_warehouse, workspace_file,
+  secret_scope, secret, uc_schema, uc_table, uc_volume, uc_catalog
+  (list+schema-validated create), workspace_permissions, uc_permissions,
+  query, repo. uc_table has no create (use sql_warehouse.run_query).
