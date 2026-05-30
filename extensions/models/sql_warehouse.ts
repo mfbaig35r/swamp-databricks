@@ -119,7 +119,7 @@ const LastStatementResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/sql_warehouse",
-  version: "2026.05.30.7",
+  version: "2026.05.30.8",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -586,6 +586,68 @@ export const model = {
           { statement_id: args.statement_id },
         );
         return { dataHandles: [] };
+      },
+    },
+
+    create_or_update: {
+      description:
+        "Reconcile: if a 'warehouse' resource named args.name exists, call " +
+        "POST /api/2.0/sql/warehouses/{id}/edit (full replace). Otherwise " +
+        "POST /api/2.0/sql/warehouses.",
+      arguments: WarehouseSettings,
+      execute: async (
+        args: z.infer<typeof WarehouseSettings>,
+        context: {
+          globalArgs: GlobalArgs;
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
+        },
+      ) => {
+        const prior = await context.readResource(args.name);
+        if (prior) {
+          const warehouseId = prior.warehouse_id as string;
+          await dbxFetch(
+            context.globalArgs,
+            `/api/2.0/sql/warehouses/${warehouseId}/edit`,
+            { method: "POST", body: JSON.stringify(args) },
+          );
+          context.logger.info(
+            "create_or_update: edited existing warehouse {warehouse_id}",
+            { warehouse_id: warehouseId },
+          );
+          const handle = await context.writeResource("warehouse", args.name, {
+            ...prior,
+            name: args.name,
+            cluster_size: args.cluster_size,
+            enable_serverless_compute: args.enable_serverless_compute,
+            warehouse_type: args.warehouse_type,
+            settings_hash: await sha256(JSON.stringify(args)),
+          });
+          return { dataHandles: [handle] };
+        }
+        const out = await dbxFetch(
+          context.globalArgs,
+          "/api/2.0/sql/warehouses",
+          { method: "POST", body: JSON.stringify(args) },
+        );
+        const warehouseId = out.id as string;
+        context.logger.info(
+          "create_or_update: created new warehouse {warehouse_id}",
+          { warehouse_id: warehouseId },
+        );
+        const handle = await context.writeResource("warehouse", args.name, {
+          warehouse_id: warehouseId,
+          name: args.name,
+          state: (out.state as string) ?? "STARTING",
+          cluster_size: args.cluster_size,
+          enable_serverless_compute: args.enable_serverless_compute,
+          warehouse_type: args.warehouse_type,
+          created_time_ms: Date.now(),
+          settings_hash: await sha256(JSON.stringify(args)),
+          workspace_url: context.globalArgs.workspace_url,
+        });
+        return { dataHandles: [handle] };
       },
     },
   },

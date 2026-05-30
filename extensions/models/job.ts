@@ -261,7 +261,7 @@ const LastRunResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/job",
-  version: "2026.05.30.7",
+  version: "2026.05.30.8",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -560,6 +560,63 @@ export const model = {
         );
         context.logger.info("Cancelled run {run_id}", { run_id: args.run_id });
         return { dataHandles: [] };
+      },
+    },
+
+    create_or_update: {
+      description:
+        "Reconcile: if a 'job' resource named args.name exists, call " +
+        "POST /api/2.2/jobs/reset (full replace). Otherwise POST /jobs/create.",
+      arguments: JobSettings,
+      execute: async (
+        args: z.infer<typeof JobSettings>,
+        context: {
+          globalArgs: GlobalArgs;
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
+        },
+      ) => {
+        const prior = await context.readResource(args.name);
+        if (prior) {
+          const jobId = prior.job_id as number;
+          await dbxFetch(
+            context.globalArgs,
+            "/api/2.2/jobs/reset",
+            {
+              method: "POST",
+              body: JSON.stringify({ job_id: jobId, new_settings: args }),
+            },
+          );
+          context.logger.info(
+            "create_or_update: reset existing job {job_id}",
+            { job_id: jobId },
+          );
+          const handle = await context.writeResource("job", args.name, {
+            ...prior,
+            name: args.name,
+            settings_hash: await sha256(JSON.stringify(args)),
+          });
+          return { dataHandles: [handle] };
+        }
+        const out = await dbxFetch(
+          context.globalArgs,
+          "/api/2.2/jobs/create",
+          { method: "POST", body: JSON.stringify(args) },
+        );
+        const jobId = out.job_id as number;
+        context.logger.info(
+          "create_or_update: created new job {job_id}",
+          { job_id: jobId },
+        );
+        const handle = await context.writeResource("job", args.name, {
+          job_id: jobId,
+          name: args.name,
+          created_time_ms: Date.now(),
+          settings_hash: await sha256(JSON.stringify(args)),
+          workspace_url: context.globalArgs.workspace_url,
+        });
+        return { dataHandles: [handle] };
       },
     },
   },

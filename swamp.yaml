@@ -1,7 +1,7 @@
 manifestVersion: 1
 name: "@mfbaig35r/databricks"
-version: "2026.05.30.7"
-description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks and files, secrets, and Unity Catalog objects as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
+version: "2026.05.30.8"
+description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks and files, secrets, and Unity Catalog (catalogs/schemas/tables/volumes) as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
 repository: "https://github.com/mfbaig35r/swamp-databricks"
 labels:
   - databricks
@@ -24,6 +24,7 @@ models:
   - workspace_file.ts
   - secret_scope.ts
   - secret.ts
+  - uc_catalog.ts
   - uc_schema.ts
   - uc_table.ts
   - uc_volume.ts
@@ -31,21 +32,34 @@ additionalFiles:
   - README.md
   - LICENSE.txt
 releaseNotes: |
-  v0.7 (2026.05.30.7)
+  v0.8 (2026.05.30.8) - Phase 1: uc_catalog + idempotency
 
-  Five new models, ten total.
+  - New model: @mfbaig35r/databricks/uc_catalog (create, read, update,
+    delete, list, create_or_update). Completes the UC top-down tree:
+    catalog -> schema -> table/volume.
 
-  Secrets (workspace-level, distinct from Swamp vault):
-  - @mfbaig35r/databricks/secret_scope: create, list, delete.
-  - @mfbaig35r/databricks/secret: put, delete, list (keys only, never values).
-    Secret values pass through to Databricks and are NEVER persisted in
-    Swamp's data layer. Pass values via CEL ${{ vault.get(...) }}.
+  - New `create_or_update` method on: job, dlt_pipeline, sql_warehouse,
+    secret_scope, uc_catalog, uc_schema, uc_volume. Reconcile semantics:
+    if a resource with args.name exists in Swamp's data layer, take the
+    update path (PATCH/PUT/reset); otherwise create. Closes the "create
+    errors on second run" gap that blocked real automation.
 
-  Unity Catalog:
-  - @mfbaig35r/databricks/uc_schema: create, read, update, delete, list.
-  - @mfbaig35r/databricks/uc_table: read, delete, list. Tables are NOT
-    created via this API; use sql_warehouse.run_query or a job notebook
-    task to CREATE TABLE, then this model captures the snapshot.
-  - @mfbaig35r/databricks/uc_volume: create, read, update, delete, list.
+  Tombstone caveat: `create_or_update` checks Swamp's data layer, not
+  the workspace. If you call `delete` and then `create_or_update` with
+  the same name, the second call will hit the patch path against a
+  workspace resource that no longer exists and fail. For now, delete +
+  recreate flows should use `create` explicitly. v0.9 may add a
+  workspace-first lookup variant.
 
-  No breaking changes from v0.6.
+  notebook.upload and workspace_file.upload already have idempotency via
+  `overwrite: true`. secret.put is already idempotent (Databricks
+  replaces on put). uc_table has no create endpoint so no
+  create_or_update.
+
+  Smoke validated on Free serverless: catalog list (3 catalogs visible),
+  schema create_or_update fresh-call (create path) + same-call-again
+  (patch path), delete cleanup. uc_catalog.create requires storage_root
+  on Free (no default metastore storage available); ships as
+  schema-validated.
+
+  No breaking changes from v0.7.

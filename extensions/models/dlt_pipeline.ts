@@ -125,7 +125,7 @@ const LastUpdateResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/dlt_pipeline",
-  version: "2026.05.30.7",
+  version: "2026.05.30.8",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -464,6 +464,63 @@ export const model = {
           { pipeline_id: pipelineId },
         );
         return { dataHandles: [] };
+      },
+    },
+
+    create_or_update: {
+      description:
+        "Reconcile: if a 'pipeline' resource named args.name exists, call " +
+        "PUT /api/2.0/pipelines/{id} (full replace). Otherwise POST.",
+      arguments: PipelineSettings,
+      execute: async (
+        args: z.infer<typeof PipelineSettings>,
+        context: {
+          globalArgs: GlobalArgs;
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
+        },
+      ) => {
+        const prior = await context.readResource(args.name);
+        if (prior) {
+          const pipelineId = prior.pipeline_id as string;
+          await dbxFetch(
+            context.globalArgs,
+            `/api/2.0/pipelines/${pipelineId}`,
+            {
+              method: "PUT",
+              body: JSON.stringify({ ...args, id: pipelineId }),
+            },
+          );
+          context.logger.info(
+            "create_or_update: updated existing pipeline {pipeline_id}",
+            { pipeline_id: pipelineId },
+          );
+          const handle = await context.writeResource("pipeline", args.name, {
+            ...prior,
+            name: args.name,
+            settings_hash: await sha256(JSON.stringify(args)),
+          });
+          return { dataHandles: [handle] };
+        }
+        const out = await dbxFetch(
+          context.globalArgs,
+          "/api/2.0/pipelines",
+          { method: "POST", body: JSON.stringify(args) },
+        );
+        const pipelineId = out.pipeline_id as string;
+        context.logger.info(
+          "create_or_update: created new pipeline {pipeline_id}",
+          { pipeline_id: pipelineId },
+        );
+        const handle = await context.writeResource("pipeline", args.name, {
+          pipeline_id: pipelineId,
+          name: args.name,
+          created_time_ms: Date.now(),
+          settings_hash: await sha256(JSON.stringify(args)),
+          workspace_url: context.globalArgs.workspace_url,
+        });
+        return { dataHandles: [handle] };
       },
     },
   },

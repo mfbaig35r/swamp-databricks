@@ -40,7 +40,7 @@ const ScopeResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/secret_scope",
-  version: "2026.05.30.7",
+  version: "2026.05.30.8",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -104,6 +104,51 @@ export const model = {
           { count: scopes.length },
         );
         return { dataHandles: [], outputs: { scopes } };
+      },
+    },
+
+    create_or_update: {
+      description:
+        "Reconcile: if a 'scope' resource named args.scope exists in " +
+        "Swamp's data layer, no-op (Databricks scopes do not support edit). " +
+        "Otherwise create. Useful for idempotent workflows.",
+      arguments: ScopeSettings,
+      execute: async (
+        args: z.infer<typeof ScopeSettings>,
+        context: {
+          globalArgs: GlobalArgs;
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
+        },
+      ) => {
+        const prior = await context.readResource(args.scope);
+        if (prior) {
+          context.logger.info(
+            "create_or_update: secret scope {scope} already exists, no-op",
+            { scope: args.scope },
+          );
+          const handle = await context.writeResource("scope", args.scope, {
+            ...prior,
+          });
+          return { dataHandles: [handle] };
+        }
+        await dbxFetch(
+          context.globalArgs,
+          "/api/2.0/secrets/scopes/create",
+          { method: "POST", body: JSON.stringify(args) },
+        );
+        context.logger.info(
+          "create_or_update: created new secret scope {scope}",
+          { scope: args.scope },
+        );
+        const handle = await context.writeResource("scope", args.scope, {
+          scope: args.scope,
+          backend_type: args.scope_backend_type ?? "DATABRICKS",
+          created_time_ms: Date.now(),
+          workspace_url: context.globalArgs.workspace_url,
+        });
+        return { dataHandles: [handle] };
       },
     },
 

@@ -85,13 +85,14 @@ from a Swamp vault.
 | `secret.delete`               | `POST /api/2.0/secrets/delete`           |
 | `secret.list` (keys only)     | `GET /api/2.0/secrets/list?scope=...`    |
 
-### `@mfbaig35r/databricks/uc_schema` + `uc_table` + `uc_volume`
+### `@mfbaig35r/databricks/uc_catalog` + `uc_schema` + `uc_table` + `uc_volume`
 
 Unity Catalog object lifecycle. Pair with DLT, jobs, or SQL workloads
 that read/write into UC.
 
 | Model + method            | API call                                        |
 |---------------------------|-------------------------------------------------|
+| `uc_catalog.create`/`read`/`update`/`delete`/`list`/`create_or_update` | `/api/2.1/unity-catalog/catalogs` |
 | `uc_schema.create`        | `POST /api/2.1/unity-catalog/schemas`           |
 | `uc_schema.read`          | `GET /api/2.1/unity-catalog/schemas/{full_name}`|
 | `uc_schema.update`        | `PATCH /api/2.1/unity-catalog/schemas/{full_name}` |
@@ -106,6 +107,20 @@ that read/write into UC.
 `uc_table` does NOT create tables (no such API endpoint). Use
 `sql_warehouse.run_query` or a job notebook task with
 `CREATE TABLE` SQL, then `uc_table.read` captures the table snapshot.
+
+### Idempotent `create_or_update`
+
+Most resource-managing models expose a `create_or_update` method
+alongside `create` and `update`. The semantics: if a Swamp resource
+keyed by `args.name` exists, take the update path; otherwise create.
+Available on: `job`, `dlt_pipeline`, `sql_warehouse`, `secret_scope`,
+`uc_catalog`, `uc_schema`, `uc_volume`.
+
+**Caveat:** the check reads Swamp's data layer, not the workspace.
+After calling `delete`, the resource is tombstoned in Swamp, so a
+subsequent `create_or_update` with the same name will hit the update
+path against a workspace resource that no longer exists and fail.
+For delete‑then‑recreate flows, call `create` explicitly.
 
 ### `@mfbaig35r/databricks/workspace_file`
 

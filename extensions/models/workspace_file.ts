@@ -63,7 +63,7 @@ const ReadArgs = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/workspace_file",
-  version: "2026.05.30.7",
+  version: "2026.05.30.8",
   globalArguments: GlobalArgsSchema,
 
   resources: {

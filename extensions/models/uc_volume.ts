@@ -57,7 +57,7 @@ const VolumeResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_volume",
-  version: "2026.05.30.7",
+  version: "2026.05.30.8",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -247,6 +247,63 @@ export const model = {
           },
         );
         return { dataHandles: [], outputs: { volumes } };
+      },
+    },
+
+    create_or_update: {
+      description:
+        "Reconcile: if a 'volume' resource named args.name exists, call " +
+        "PATCH on the new_name field only (UC volume PATCH does not accept " +
+        "volume_type or storage_location changes); otherwise call POST.",
+      arguments: CreateArgs,
+      execute: async (
+        args: z.infer<typeof CreateArgs>,
+        context: {
+          globalArgs: GlobalArgs;
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
+        },
+      ) => {
+        const prior = await context.readResource(args.name);
+        if (prior) {
+          const patch: Record<string, unknown> = {};
+          if (args.comment !== undefined) patch.comment = args.comment;
+          await dbxFetch(
+            context.globalArgs,
+            `/api/2.1/unity-catalog/volumes/${prior.full_name}`,
+            { method: "PATCH", body: JSON.stringify(patch) },
+          );
+          context.logger.info(
+            "create_or_update: patched existing volume {full_name}",
+            { full_name: prior.full_name },
+          );
+          const handle = await context.writeResource("volume", args.name, {
+            ...prior,
+          });
+          return { dataHandles: [handle] };
+        }
+        const out = await dbxFetch(
+          context.globalArgs,
+          "/api/2.1/unity-catalog/volumes",
+          { method: "POST", body: JSON.stringify(args) },
+        );
+        const fullName = out.full_name as string;
+        context.logger.info(
+          "create_or_update: created new volume {full_name}",
+          { full_name: fullName },
+        );
+        const handle = await context.writeResource("volume", args.name, {
+          full_name: fullName,
+          name: args.name,
+          catalog_name: args.catalog_name,
+          schema_name: args.schema_name,
+          volume_type: args.volume_type,
+          owner: out.owner as string | undefined,
+          created_time_ms: Date.now(),
+          workspace_url: context.globalArgs.workspace_url,
+        });
+        return { dataHandles: [handle] };
       },
     },
   },
