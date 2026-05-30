@@ -50,11 +50,12 @@ Databricks Jobs API 2.2 lifecycle.
 | `wait_run`   | polls `GET /api/2.2/jobs/runs/get`    |
 | `cancel_run` | `POST /api/2.2/jobs/runs/cancel`      |
 
-Task types validated by Zod in v0.5: `notebook_task`, `sql_task` (with
+Task types validated by Zod in v0.6: `notebook_task`, `sql_task` (with
 query / file / dashboard / alert variants), `pipeline_task`,
 `spark_python_task`, `spark_jar_task`, `python_wheel_task`, `dbt_task`,
 `run_job_task`, `condition_task`, `for_each_task` (recursive). End-to-end
-workspace validation covers `notebook_task`; others ship as schema-only
+workspace validation covers `notebook_task` and `sql_task` (via the
+`workspace_file` model documented below). Others ship as schema-only
 because they need compute or dependencies the smoke test environment
 does not have.
 
@@ -67,6 +68,24 @@ Workspace notebook lifecycle. Resources keyed by absolute path.
 | `upload` | `POST /api/2.0/workspace/import`      |
 | `read`   | `GET /api/2.0/workspace/export`       |
 | `delete` | `POST /api/2.0/workspace/delete`      |
+
+### `@mfbaig35r/databricks/workspace_file`
+
+Workspace file (FILE object type) lifecycle. Use this when a downstream
+task references a plain source file at a workspace path: `sql_task.file`,
+`spark_python_task.python_file`, dbt project files, etc. Distinct from
+the `notebook` model, which manages NOTEBOOK objects.
+
+| Method   | API call                                  |
+|----------|-------------------------------------------|
+| `upload` | `POST /api/2.0/workspace/import` (`format: AUTO`, no language) |
+| `read`   | `GET /api/2.0/workspace/export` (`format: AUTO`) |
+| `delete` | `POST /api/2.0/workspace/delete`          |
+
+Upload also calls `/api/2.0/workspace/get-status` and records the
+resulting `object_type` on the resource. In modern Databricks workspaces
+this is `FILE`. Older workspaces may produce a `NOTEBOOK` for certain
+content; the resource reflects what actually got created.
 
 ### `@mfbaig35r/databricks/sql_warehouse`
 

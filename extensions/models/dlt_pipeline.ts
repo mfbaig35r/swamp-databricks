@@ -125,7 +125,7 @@ const LastUpdateResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/dlt_pipeline",
-  version: "2026.05.30.5",
+  version: "2026.05.30.6",
   globalArguments: GlobalArgsSchema,
 
   resources: {

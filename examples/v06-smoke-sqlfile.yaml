@@ -1,0 +1,4 @@
+path: /Shared/swamp-v06-smoke.sql
+overwrite: true
+content: |
+  SELECT 1 AS hello, current_timestamp() AS ts

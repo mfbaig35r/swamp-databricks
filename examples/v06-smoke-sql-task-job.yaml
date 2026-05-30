@@ -1,0 +1,9 @@
+name: swamp-v06-sql-task
+tasks:
+  - task_key: run_sql
+    sql_task:
+      warehouse_id: b76fe701d8f4f090
+      file:
+        path: /Shared/swamp-v06-smoke.sql
+        source: WORKSPACE
+max_concurrent_runs: 1
