@@ -1,0 +1,6 @@
+name: swamp-databricks-v02-smoke
+tasks:
+  - task_key: hello
+    notebook_task:
+      notebook_path: /Shared/swamp-smoke-v02
+max_concurrent_runs: 1

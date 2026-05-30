@@ -1,12 +1,8 @@
 # @mfbaig35r/databricks
 
-Databricks Jobs, DLT pipelines, and Unity Catalog resources as Swamp models.
+Databricks Jobs, DLT pipelines, and workspace notebooks as Swamp models.
 Compose Databricks pipelines with non-Databricks resources (S3 datastores,
 Postgres tables, secrets vaults, Cloudflare modules) in a single Swamp workflow.
-
-This first release ships the `@mfbaig35r/databricks/job` model, covering the
-Databricks Jobs API 2.2 surface: create, read, update (full reset), delete,
-trigger a run, wait for terminal state, and cancel a run.
 
 ## Why this exists
 
@@ -22,41 +18,84 @@ automation framework.
 swamp extension pull @mfbaig35r/databricks
 ```
 
-Then reference it from a workflow or model in your Swamp repo. Configure the
-target workspace via `globalArguments`:
+Store a Databricks PAT in a Swamp vault:
+
+```sh
+swamp vault create local_encryption databricks
+swamp vault put databricks pat
+```
+
+Reference the vault from each model's `globalArguments`:
 
 ```yaml
 globalArguments:
-  workspace_url: "https://adb-xxx.azuredatabricks.net"
-  auth:
-    kind: pat
-    token_secret: databricks/pat
+  workspace_url: "https://dbc-xxxx.cloud.databricks.com"
+  auth_kind: pat
+  token: ${{ vault.get("databricks", "pat") }}
 ```
 
-The `token_secret` value is a vault key, not the raw token. Store the actual
-PAT in your Swamp vault first:
+## Models
 
-```sh
-swamp vault set databricks/pat
-```
+### `@mfbaig35r/databricks/job`
 
-## Methods
+Databricks Jobs API 2.2 lifecycle.
 
-| Method       | API call                              | Notes |
-|--------------|---------------------------------------|-------|
-| `create`     | `POST /api/2.2/jobs/create`           | Writes a `job` resource keyed by the user-supplied name. |
-| `read`       | `GET /api/2.2/jobs/get`               | Live read; does not mutate resources. |
-| `update`     | `POST /api/2.2/jobs/reset`            | Full replace. Partial patch is intentionally out of scope. |
-| `delete`     | `POST /api/2.2/jobs/delete`           | Removes the job from the workspace. |
-| `run`        | `POST /api/2.2/jobs/run-now`          | Fire and forget; writes a `last_run` resource. |
-| `wait_run`   | `GET /api/2.2/jobs/runs/get` (poll)   | Polls until terminal state (TERMINATED, SKIPPED, INTERNAL_ERROR). |
-| `cancel_run` | `POST /api/2.2/jobs/runs/cancel`      | Cancels an in-flight run by `run_id`. |
+| Method       | API call                              |
+|--------------|---------------------------------------|
+| `create`     | `POST /api/2.2/jobs/create`           |
+| `read`       | `GET /api/2.2/jobs/get`               |
+| `update`     | `POST /api/2.2/jobs/reset`            |
+| `delete`     | `POST /api/2.2/jobs/delete`           |
+| `run`        | `POST /api/2.2/jobs/run-now`          |
+| `wait_run`   | polls `GET /api/2.2/jobs/runs/get`    |
+| `cancel_run` | `POST /api/2.2/jobs/runs/cancel`      |
+
+Task types validated by Zod in v0.2: `notebook_task`, `sql_task`, `pipeline_task`.
+
+### `@mfbaig35r/databricks/notebook`
+
+Workspace notebook lifecycle. Resources keyed by absolute path.
+
+| Method   | API call                              |
+|----------|---------------------------------------|
+| `upload` | `POST /api/2.0/workspace/import`      |
+| `read`   | `GET /api/2.0/workspace/export`       |
+| `delete` | `POST /api/2.0/workspace/delete`      |
+
+### `@mfbaig35r/databricks/dlt_pipeline`
+
+Delta Live Tables pipeline lifecycle. DLT calls runs "updates".
+
+| Method         | API call                                          |
+|----------------|---------------------------------------------------|
+| `create`       | `POST /api/2.0/pipelines`                         |
+| `read`         | `GET /api/2.0/pipelines/{id}`                     |
+| `update`       | `PUT /api/2.0/pipelines/{id}`                     |
+| `delete`       | `DELETE /api/2.0/pipelines/{id}`                  |
+| `start_update` | `POST /api/2.0/pipelines/{id}/updates`            |
+| `wait_update`  | polls `GET /api/2.0/pipelines/{id}/updates/{uid}` |
+| `stop`         | `POST /api/2.0/pipelines/{id}/stop`               |
+
+On Databricks Free Edition, set `serverless: true` in the `create` args. The
+DLT model is shipped as preview in v0.2; end-to-end validation against a Free
+workspace is pending.
 
 ## Example workflow
 
 ```yaml
 name: nightly-ingest
 steps:
+  - id: upload_etl_nb
+    model: "@mfbaig35r/databricks/notebook"
+    method: upload
+    arguments:
+      path: /Shared/etl/ingest
+      language: PYTHON
+      overwrite: true
+      content: |
+        # Databricks notebook source
+        spark.read.format("csv").load("s3://my-bucket/data/").write.saveAsTable("bronze.events")
+
   - id: define_job
     model: "@mfbaig35r/databricks/job"
     method: create
@@ -65,19 +104,14 @@ steps:
       tasks:
         - task_key: ingest
           notebook_task:
-            notebook_path: /Repos/team/etl/ingest
-          job_cluster_key: small
-      job_clusters:
-        - job_cluster_key: small
-          new_cluster:
-            spark_version: 15.4.x-scala2.12
-            node_type_id: i3.xlarge
-            num_workers: 2
+            notebook_path: /Shared/etl/ingest
+
   - id: trigger
     model: "@mfbaig35r/databricks/job"
     method: run
     arguments:
       job_ref: nightly-ingest
+
   - id: wait
     model: "@mfbaig35r/databricks/job"
     method: wait_run
@@ -85,36 +119,24 @@ steps:
       run_id: ${{ steps.trigger.outputs.run_id }}
 ```
 
-## Task type coverage in v1
-
-Validated via Zod discriminated union:
-
-- `notebook_task`
-- `sql_task`
-- `pipeline_task` (DLT)
-
-Other Databricks task types (`spark_python_task`, `python_wheel_task`,
-`dbt_task`, `run_job_task`, `for_each_task`, `condition_task`,
-`spark_jar_task`) are not yet schema-validated. They will be added in
-subsequent releases as their schemas stabilize.
-
 ## Auth strategies
 
-- `pat`: personal access token resolved from a vault key.
+- `pat` (default): personal access token, resolved via CEL `vault.get("...", "...")`.
 - `oauth_m2m`: client credentials grant via `/oidc/v1/token`. Client secret
-  resolved from a vault key.
+  resolved via CEL.
 - `azure_msi`: stubbed; not yet implemented.
 
 ## Roadmap
 
-- `@mfbaig35r/databricks/dlt_pipeline`: Delta Live Tables pipelines as a first-class
-  model.
-- `@mfbaig35r/databricks/uc_schema`, `uc_table`, `uc_volume`: Unity Catalog
-  resources.
-- `@mfbaig35r/databricks/secret_scope`, `secret`: Secrets API.
-- `@mfbaig35r/databricks/sql_warehouse`: SQL Warehouses for DBSQL tasks.
-- Expand task discriminated union to the full Jobs API surface.
+- Expand Job task-type discriminated union (`spark_python_task`,
+  `python_wheel_task`, `dbt_task`, `run_job_task`, `for_each_task`,
+  `condition_task`, `spark_jar_task`).
+- Unity Catalog: `@mfbaig35r/databricks/uc_schema`, `uc_table`, `uc_volume`,
+  with grants.
+- Secrets: `@mfbaig35r/databricks/secret_scope`, `secret`.
+- SQL Warehouses: `@mfbaig35r/databricks/sql_warehouse`.
+- Azure MSI auth.
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+Apache-2.0. See `LICENSE.txt`.

@@ -1,7 +1,16 @@
 import { z } from "npm:zod@4";
+import {
+  dbxFetch,
+  GlobalArgs,
+  GlobalArgsSchema,
+  Logger,
+  ReadResource,
+  sha256,
+  WriteResource,
+} from "../_lib/databricks.ts";
 
 // ---------------------------------------------------------------------------
-// Task schemas (v1: notebook, sql, pipeline; others passthrough)
+// Task schemas (v0.2: notebook, sql, pipeline; others not yet validated)
 // ---------------------------------------------------------------------------
 
 const NotebookTask = z.object({
@@ -81,25 +90,6 @@ const JobSettings = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Global args: workspace URL + auth strategy. Secrets resolved at call time.
-// ---------------------------------------------------------------------------
-
-const GlobalArgsSchema = z.object({
-  workspace_url: z.string().url(),
-  auth_kind: z.enum(["pat", "oauth_m2m", "azure_msi"]).default("pat"),
-  token: z.string().optional().describe(
-    'Resolved PAT value. Pass via CEL: ${{ vault.get("databricks", "pat") }}',
-  ),
-  oauth_client_id: z.string().optional(),
-  oauth_client_secret: z.string().optional().describe(
-    'Resolved OAuth M2M client secret. Pass via CEL: ${{ vault.get("...", "...") }}',
-  ),
-  azure_msi_client_id: z.string().optional(),
-});
-
-type GlobalArgs = z.infer<typeof GlobalArgsSchema>;
-
-// ---------------------------------------------------------------------------
 // Resource schemas
 // ---------------------------------------------------------------------------
 
@@ -122,126 +112,6 @@ const LastRunResourceSchema = z.object({
   end_time_ms: z.number().int().optional(),
 });
 
-const NotebookResourceSchema = z.object({
-  path: z.string(),
-  language: z.string(),
-  uploaded_time_ms: z.number().int(),
-  workspace_url: z.string().url(),
-});
-
-const UploadNotebookArgs = z.object({
-  path: z.string().regex(/^\/.+/, "path must be absolute (start with /)"),
-  content: z.string().min(1).describe("Raw notebook source text (NOT base64)"),
-  language: z.enum(["PYTHON", "SCALA", "SQL", "R"]).default("PYTHON"),
-  overwrite: z.boolean().default(false),
-});
-
-const DeleteNotebookArgs = z.object({
-  path: z.string().regex(/^\/.+/),
-  recursive: z.boolean().default(false),
-});
-
-/** UTF-8 safe base64 encode for the workspace import body. */
-function b64encode(s: string): string {
-  const bytes = new TextEncoder().encode(s);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-
-/**
- * Encode a workspace path into a Swamp-safe resource name.
- * Swamp rejects '/', '\\', '..', and null bytes in resource names.
- * "/Shared/foo/bar" -> "Shared:foo:bar"
- */
-function pathToResourceName(path: string): string {
-  return path.replace(/^\//, "").replace(/\//g, ":");
-}
-
-// ---------------------------------------------------------------------------
-// Helpers (Web Crypto, Bearer fetch)
-// ---------------------------------------------------------------------------
-
-async function sha256(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(input),
-  );
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function resolveToken(globalArgs: GlobalArgs): Promise<string> {
-  switch (globalArgs.auth_kind) {
-    case "pat": {
-      if (!globalArgs.token) {
-        throw new Error(
-          "auth_kind=pat requires globalArgs.token (resolved PAT value, " +
-            'pass via CEL: ${{ vault.get("databricks", "pat") }})',
-        );
-      }
-      return globalArgs.token;
-    }
-    case "oauth_m2m": {
-      if (!globalArgs.oauth_client_id || !globalArgs.oauth_client_secret) {
-        throw new Error(
-          "auth_kind=oauth_m2m requires globalArgs.oauth_client_id and oauth_client_secret",
-        );
-      }
-      const tokenUrl = `${globalArgs.workspace_url}/oidc/v1/token`;
-      const body = new URLSearchParams({
-        grant_type: "client_credentials",
-        scope: "all-apis",
-      });
-      const auth = btoa(
-        `${globalArgs.oauth_client_id}:${globalArgs.oauth_client_secret}`,
-      );
-      const res = await fetch(tokenUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": `Basic ${auth}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: body.toString(),
-      });
-      if (!res.ok) {
-        throw new Error(
-          `oauth_m2m token mint failed: ${res.status} ${await res.text()}`,
-        );
-      }
-      const json = await res.json() as { access_token: string };
-      return json.access_token;
-    }
-    case "azure_msi":
-      throw new Error(
-        "azure_msi auth is not implemented in @mfbaig35r/databricks/job v1",
-      );
-  }
-}
-
-async function dbxFetch(
-  globalArgs: GlobalArgs,
-  path: string,
-  init: RequestInit = {},
-): Promise<Record<string, unknown>> {
-  const token = await resolveToken(globalArgs);
-  const res = await fetch(`${globalArgs.workspace_url}${path}`, {
-    ...init,
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    throw new Error(
-      `databricks ${path} ${res.status}: ${await res.text()}`,
-    );
-  }
-  return await res.json() as Record<string, unknown>;
-}
-
 // ---------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------
@@ -255,14 +125,18 @@ async function dbxFetch(
  * most recent run, so subsequent calls look up state by the user-supplied
  * `name` rather than re-creating.
  *
- * Auth is configured via `globalArguments`: `pat` (vault-resolved token),
- * `oauth_m2m` (client credentials grant), or `azure_msi` (stubbed).
+ * Auth is configured via `globalArguments`: `pat` (resolved via CEL
+ * `vault.get`), `oauth_m2m` (client credentials), or `azure_msi` (stubbed).
+ *
+ * Notebook management is in the sibling `@mfbaig35r/databricks/notebook` model
+ * as of v0.2; this model only references notebooks by path through
+ * `notebook_task.notebook_path`.
  *
  * @see https://docs.databricks.com/api/workspace/jobs
  */
 export const model = {
   type: "@mfbaig35r/databricks/job",
-  version: "2026.05.30.1",
+  version: "2026.05.30.2",
   globalArguments: GlobalArgsSchema,
 
   resources: {
@@ -278,15 +152,6 @@ export const model = {
       lifetime: "workflow" as const,
       garbageCollection: 10,
     },
-    "notebook": {
-      description:
-        "A workspace notebook uploaded via this model, keyed by absolute path. " +
-        "Convenience surface for end-to-end smoke testing; will split into " +
-        "@mfbaig35r/databricks/notebook in a future release.",
-      schema: NotebookResourceSchema,
-      lifetime: "infinite" as const,
-      garbageCollection: 5,
-    },
   },
 
   methods: {
@@ -298,15 +163,8 @@ export const model = {
         args: z.infer<typeof JobSettings>,
         context: {
           globalArgs: GlobalArgs;
-
-          writeResource: (
-            specName: string,
-            instanceName: string,
-            data: Record<string, unknown>,
-          ) => Promise<{ name: string }>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          writeResource: WriteResource;
+          logger: Logger;
         },
       ) => {
         const out = await dbxFetch(
@@ -332,20 +190,14 @@ export const model = {
 
     read: {
       description:
-        "Fetch current settings from the workspace via GET /api/2.2/jobs/get. " +
-        "Returns live settings without modifying any stored resource.",
+        "Fetch current settings from the workspace via GET /api/2.2/jobs/get.",
       arguments: z.object({ job_ref: z.string() }),
       execute: async (
         args: { job_ref: string },
         context: {
           globalArgs: GlobalArgs;
-
-          readResource: (
-            instanceName: string,
-          ) => Promise<Record<string, unknown> | null>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          readResource: ReadResource;
+          logger: Logger;
         },
       ) => {
         const prior = await context.readResource(args.job_ref);
@@ -366,7 +218,7 @@ export const model = {
 
     update: {
       description: "Full replace via POST /api/2.2/jobs/reset. " +
-        "Spec passed becomes the spec on the workspace; partial patching not supported in v1.",
+        "Spec passed becomes spec on the workspace; partial patch not supported.",
       arguments: z.object({
         job_ref: z.string(),
         settings: JobSettings,
@@ -375,18 +227,9 @@ export const model = {
         args: { job_ref: string; settings: z.infer<typeof JobSettings> },
         context: {
           globalArgs: GlobalArgs;
-
-          readResource: (
-            instanceName: string,
-          ) => Promise<Record<string, unknown> | null>;
-          writeResource: (
-            specName: string,
-            instanceName: string,
-            data: Record<string, unknown>,
-          ) => Promise<{ name: string }>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
         },
       ) => {
         const prior = await context.readResource(args.job_ref);
@@ -427,13 +270,8 @@ export const model = {
         args: { job_ref: string },
         context: {
           globalArgs: GlobalArgs;
-
-          readResource: (
-            instanceName: string,
-          ) => Promise<Record<string, unknown> | null>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          readResource: ReadResource;
+          logger: Logger;
         },
       ) => {
         const prior = await context.readResource(args.job_ref);
@@ -471,18 +309,9 @@ export const model = {
         },
         context: {
           globalArgs: GlobalArgs;
-
-          readResource: (
-            instanceName: string,
-          ) => Promise<Record<string, unknown> | null>;
-          writeResource: (
-            specName: string,
-            instanceName: string,
-            data: Record<string, unknown>,
-          ) => Promise<{ name: string }>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          readResource: ReadResource;
+          writeResource: WriteResource;
+          logger: Logger;
         },
       ) => {
         const prior = await context.readResource(args.job_ref);
@@ -538,15 +367,8 @@ export const model = {
         args: { run_id: number; poll_seconds: number; timeout_seconds: number },
         context: {
           globalArgs: GlobalArgs;
-
-          writeResource: (
-            specName: string,
-            instanceName: string,
-            data: Record<string, unknown>,
-          ) => Promise<{ name: string }>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          writeResource: WriteResource;
+          logger: Logger;
         },
       ) => {
         const terminal = new Set([
@@ -603,9 +425,7 @@ export const model = {
         args: { run_id: number },
         context: {
           globalArgs: GlobalArgs;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
+          logger: Logger;
         },
       ) => {
         await dbxFetch(
@@ -614,86 +434,6 @@ export const model = {
           { method: "POST", body: JSON.stringify({ run_id: args.run_id }) },
         );
         context.logger.info("Cancelled run {run_id}", { run_id: args.run_id });
-        return { dataHandles: [] };
-      },
-    },
-
-    upload_notebook: {
-      description: "Import a notebook source to the workspace via " +
-        "POST /api/2.0/workspace/import. Writes a 'notebook' resource keyed " +
-        "by absolute path. Content is raw source text; the model base64-encodes.",
-      arguments: UploadNotebookArgs,
-      execute: async (
-        args: z.infer<typeof UploadNotebookArgs>,
-        context: {
-          globalArgs: GlobalArgs;
-          writeResource: (
-            specName: string,
-            instanceName: string,
-            data: Record<string, unknown>,
-          ) => Promise<{ name: string }>;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
-        },
-      ) => {
-        await dbxFetch(
-          context.globalArgs,
-          "/api/2.0/workspace/import",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              path: args.path,
-              content: b64encode(args.content),
-              format: "SOURCE",
-              language: args.language,
-              overwrite: args.overwrite,
-            }),
-          },
-        );
-        context.logger.info(
-          "Uploaded {language} notebook to {path}",
-          { language: args.language, path: args.path },
-        );
-        const handle = await context.writeResource(
-          "notebook",
-          pathToResourceName(args.path),
-          {
-            path: args.path,
-            language: args.language,
-            uploaded_time_ms: Date.now(),
-            workspace_url: context.globalArgs.workspace_url,
-          },
-        );
-        return { dataHandles: [handle] };
-      },
-    },
-
-    delete_notebook: {
-      description:
-        "Delete a notebook from the workspace via POST /api/2.0/workspace/delete.",
-      arguments: DeleteNotebookArgs,
-      execute: async (
-        args: z.infer<typeof DeleteNotebookArgs>,
-        context: {
-          globalArgs: GlobalArgs;
-          logger: {
-            info: (msg: string, props: Record<string, unknown>) => void;
-          };
-        },
-      ) => {
-        await dbxFetch(
-          context.globalArgs,
-          "/api/2.0/workspace/delete",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              path: args.path,
-              recursive: args.recursive,
-            }),
-          },
-        );
-        context.logger.info("Deleted notebook {path}", { path: args.path });
         return { dataHandles: [] };
       },
     },

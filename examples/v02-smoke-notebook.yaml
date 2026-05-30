@@ -1,0 +1,7 @@
+path: /Shared/swamp-smoke-v02
+language: PYTHON
+overwrite: true
+content: |
+  # Databricks notebook source
+  print("hello from swamp v0.2 cross-model")
+  dbutils.notebook.exit("ok")
