@@ -69,6 +69,44 @@ Workspace notebook lifecycle. Resources keyed by absolute path.
 | `read`   | `GET /api/2.0/workspace/export`       |
 | `delete` | `POST /api/2.0/workspace/delete`      |
 
+### `@mfbaig35r/databricks/secret_scope` + `@mfbaig35r/databricks/secret`
+
+Workspace secrets (distinct from Swamp vault). Secret values pass through
+to the Databricks Secrets API and are never persisted in Swamp's data
+layer; pass them via CEL `${{ vault.get(...) }}` if you want them sourced
+from a Swamp vault.
+
+| Model + method                | API call                                 |
+|-------------------------------|------------------------------------------|
+| `secret_scope.create`         | `POST /api/2.0/secrets/scopes/create`    |
+| `secret_scope.list`           | `GET /api/2.0/secrets/scopes/list`       |
+| `secret_scope.delete`         | `POST /api/2.0/secrets/scopes/delete`    |
+| `secret.put`                  | `POST /api/2.0/secrets/put`              |
+| `secret.delete`               | `POST /api/2.0/secrets/delete`           |
+| `secret.list` (keys only)     | `GET /api/2.0/secrets/list?scope=...`    |
+
+### `@mfbaig35r/databricks/uc_schema` + `uc_table` + `uc_volume`
+
+Unity Catalog object lifecycle. Pair with DLT, jobs, or SQL workloads
+that read/write into UC.
+
+| Model + method            | API call                                        |
+|---------------------------|-------------------------------------------------|
+| `uc_schema.create`        | `POST /api/2.1/unity-catalog/schemas`           |
+| `uc_schema.read`          | `GET /api/2.1/unity-catalog/schemas/{full_name}`|
+| `uc_schema.update`        | `PATCH /api/2.1/unity-catalog/schemas/{full_name}` |
+| `uc_schema.delete`        | `DELETE /api/2.1/unity-catalog/schemas/{full_name}` |
+| `uc_schema.list`          | `GET /api/2.1/unity-catalog/schemas?catalog_name=...` |
+| `uc_table.read`           | `GET /api/2.1/unity-catalog/tables/{full_name}` |
+| `uc_table.delete`         | `DELETE /api/2.1/unity-catalog/tables/{full_name}` |
+| `uc_table.list`           | `GET /api/2.1/unity-catalog/tables?...`         |
+| `uc_volume.create`        | `POST /api/2.1/unity-catalog/volumes`           |
+| `uc_volume.read`/`update`/`delete`/`list` | the rest of the volumes surface |
+
+`uc_table` does NOT create tables (no such API endpoint). Use
+`sql_warehouse.run_query` or a job notebook task with
+`CREATE TABLE` SQL, then `uc_table.read` captures the table snapshot.
+
 ### `@mfbaig35r/databricks/workspace_file`
 
 Workspace file (FILE object type) lifecycle. Use this when a downstream

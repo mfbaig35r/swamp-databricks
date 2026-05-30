@@ -261,7 +261,7 @@ const LastRunResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/job",
-  version: "2026.05.30.6",
+  version: "2026.05.30.7",
   globalArguments: GlobalArgsSchema,
 
   resources: {

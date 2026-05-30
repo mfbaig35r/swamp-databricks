@@ -1,7 +1,7 @@
 manifestVersion: 1
 name: "@mfbaig35r/databricks"
-version: "2026.05.30.6"
-description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks, and workspace files as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
+version: "2026.05.30.7"
+description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks and files, secrets, and Unity Catalog objects as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
 repository: "https://github.com/mfbaig35r/swamp-databricks"
 labels:
   - databricks
@@ -10,6 +10,7 @@ labels:
   - dlt
   - sql
   - unity-catalog
+  - secrets
 platforms:
   - linux-x86_64
   - linux-aarch64
@@ -21,27 +22,30 @@ models:
   - dlt_pipeline.ts
   - sql_warehouse.ts
   - workspace_file.ts
+  - secret_scope.ts
+  - secret.ts
+  - uc_schema.ts
+  - uc_table.ts
+  - uc_volume.ts
 additionalFiles:
   - README.md
   - LICENSE.txt
 releaseNotes: |
-  v0.6 (2026.05.30.6)
+  v0.7 (2026.05.30.7)
 
-  - New model: @mfbaig35r/databricks/workspace_file. Owns upload, read
-    (export), and delete for workspace files (FILE object type). Distinct
-    from @mfbaig35r/databricks/notebook (which owns NOTEBOOK objects).
-    Use this when a downstream task references a plain file at a workspace
-    path: sql_task.file, spark_python_task.python_file, dbt project files,
-    etc.
+  Five new models, ten total.
 
-  - sql_task end-to-end validated. Closes the v0.5 gap: workspace_file
-    upload -> job with sql_task.file -> run -> wait_run COMPLETED + SUCCESS
-    on Databricks Free serverless.
+  Secrets (workspace-level, distinct from Swamp vault):
+  - @mfbaig35r/databricks/secret_scope: create, list, delete.
+  - @mfbaig35r/databricks/secret: put, delete, list (keys only, never values).
+    Secret values pass through to Databricks and are NEVER persisted in
+    Swamp's data layer. Pass values via CEL ${{ vault.get(...) }}.
 
-  - upload uses POST /api/2.0/workspace/import with format=AUTO and no
-    language, then calls /api/2.0/workspace/get-status to verify and
-    record the resulting object_type on the resource. Modern workspaces
-    produce FILE; older workspaces may produce NOTEBOOK depending on
-    content, and the resource reflects what was created.
+  Unity Catalog:
+  - @mfbaig35r/databricks/uc_schema: create, read, update, delete, list.
+  - @mfbaig35r/databricks/uc_table: read, delete, list. Tables are NOT
+    created via this API; use sql_warehouse.run_query or a job notebook
+    task to CREATE TABLE, then this model captures the snapshot.
+  - @mfbaig35r/databricks/uc_volume: create, read, update, delete, list.
 
-  No breaking changes from v0.5.
+  No breaking changes from v0.6.
