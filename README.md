@@ -62,6 +62,28 @@ Workspace notebook lifecycle. Resources keyed by absolute path.
 | `read`   | `GET /api/2.0/workspace/export`       |
 | `delete` | `POST /api/2.0/workspace/delete`      |
 
+### `@mfbaig35r/databricks/sql_warehouse`
+
+SQL Warehouse lifecycle plus statement execution via the SQL Statement Execution API.
+
+| Method             | API call                                              |
+|--------------------|-------------------------------------------------------|
+| `create`           | `POST /api/2.0/sql/warehouses`                        |
+| `adopt`            | `GET /api/2.0/sql/warehouses/{id}` (register existing) |
+| `read`             | `GET /api/2.0/sql/warehouses/{id}`                    |
+| `update`           | `POST /api/2.0/sql/warehouses/{id}/edit`              |
+| `delete`           | `DELETE /api/2.0/sql/warehouses/{id}`                 |
+| `start`            | `POST /api/2.0/sql/warehouses/{id}/start`             |
+| `stop`             | `POST /api/2.0/sql/warehouses/{id}/stop`              |
+| `run_query`        | `POST /api/2.0/sql/statements` (sync up to 50s)       |
+| `wait_statement`   | polls `GET /api/2.0/sql/statements/{id}`              |
+| `cancel_statement` | `POST /api/2.0/sql/statements/{id}/cancel`            |
+
+On Databricks Free Edition, warehouse quotas are small (often 1-2). Use
+`adopt` to register the auto-provisioned Starter Warehouse instead of
+creating new ones. `enable_serverless_compute: true` is the default (the
+only option on Free).
+
 ### `@mfbaig35r/databricks/dlt_pipeline`
 
 Delta Live Tables pipeline lifecycle. DLT calls runs "updates".

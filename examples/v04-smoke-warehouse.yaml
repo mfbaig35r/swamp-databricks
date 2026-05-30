@@ -1,0 +1,5 @@
+name: swamp-sql-smoke
+cluster_size: "2X-Small"
+auto_stop_mins: 5
+enable_serverless_compute: true
+warehouse_type: PRO
