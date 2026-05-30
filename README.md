@@ -76,9 +76,16 @@ Delta Live Tables pipeline lifecycle. DLT calls runs "updates".
 | `wait_update`  | polls `GET /api/2.0/pipelines/{id}/updates/{uid}` |
 | `stop`         | `POST /api/2.0/pipelines/{id}/stop`               |
 
-On Databricks Free Edition, set `serverless: true` in the `create` args. The
-DLT model is shipped as preview in v0.2; end-to-end validation against a Free
-workspace is pending.
+On Databricks Free Edition, set `serverless: true` in the `create` args. When
+`serverless: true`, `catalog` is required (the Databricks API rejects without
+it); on Free, the default UC catalog is `workspace`.
+
+**Heads up on cleanup:** `DELETE /api/2.0/pipelines/{id}` removes the pipeline
+definition but does NOT drop the Delta tables the pipeline materialized in its
+target schema. Once a table is written, it is an independent UC object. To
+fully clean up after deleting a pipeline, run
+`DROP TABLE <catalog>.<target>.<name>` in a SQL warehouse or notebook. A future
+`@mfbaig35r/databricks/sql_warehouse` model will make this a Swamp-native step.
 
 ## Example workflow
 

@@ -23,3 +23,7 @@ CLAUDE.md
 
 # macOS noise
 .DS_Store
+
+# Local model-instance definitions (per-machine UUIDs, workspace identifiers).
+# Root-anchored so it does NOT also match extensions/models/ source.
+/models/

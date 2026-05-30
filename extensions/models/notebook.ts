@@ -7,7 +7,7 @@ import {
   Logger,
   pathToResourceName,
   WriteResource,
-} from "../_lib/databricks.ts";
+} from "./_lib/databricks.ts";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -51,7 +51,7 @@ const ExportArgs = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/notebook",
-  version: "2026.05.30.2",
+  version: "2026.05.30.3",
   globalArguments: GlobalArgsSchema,
 
   resources: {

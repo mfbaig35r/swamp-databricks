@@ -7,7 +7,7 @@ import {
   ReadResource,
   sha256,
   WriteResource,
-} from "../_lib/databricks.ts";
+} from "./_lib/databricks.ts";
 
 // ---------------------------------------------------------------------------
 // Task schemas (v0.2: notebook, sql, pipeline; others not yet validated)
@@ -136,7 +136,7 @@ const LastRunResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/job",
-  version: "2026.05.30.2",
+  version: "2026.05.30.3",
   globalArguments: GlobalArgsSchema,
 
   resources: {

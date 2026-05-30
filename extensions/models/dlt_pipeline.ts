@@ -7,7 +7,7 @@ import {
   ReadResource,
   sha256,
   WriteResource,
-} from "../_lib/databricks.ts";
+} from "./_lib/databricks.ts";
 
 // ---------------------------------------------------------------------------
 // Library schemas (what runs inside the pipeline)
@@ -77,7 +77,15 @@ const PipelineSettings = z.object({
   serverless: z.boolean().optional().describe(
     "Use serverless compute (required on Databricks Free)",
   ),
-});
+}).refine(
+  (s) => !s.serverless || !!s.catalog,
+  {
+    message:
+      "catalog is required when serverless=true (Databricks API constraint; " +
+      "on Free Edition the default UC catalog is 'workspace')",
+    path: ["catalog"],
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Resource schemas
@@ -117,7 +125,7 @@ const LastUpdateResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/dlt_pipeline",
-  version: "2026.05.30.2",
+  version: "2026.05.30.3",
   globalArguments: GlobalArgsSchema,
 
   resources: {

@@ -1,0 +1,9 @@
+name: swamp-dlt-smoke
+serverless: true
+catalog: workspace
+target: default
+libraries:
+  - notebook:
+      path: /Shared/swamp-dlt-smoke
+development: true
+continuous: false
