@@ -54,7 +54,7 @@ const ListArgs = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_table",
-  version: "2026.05.30.15",
+  version: "2026.05.30.16",
   globalArguments: GlobalArgsSchema,
 
   resources: {

@@ -337,6 +337,13 @@ Reference workflows that combine multiple models live in
   rate‑limited Spark fan‑out and schema‑drift‑proof storage. Reference
   implementation is [the Met Museum](./examples/api-ingest/met-museum/)
   (public API, no auth required, runnable on Databricks Free).
+- [`examples/agent-templates/`](./examples/agent-templates/) — fork‑and‑adapt
+  templates for the four canonical patterns the `swamp-databricks-author`
+  skill points at: file ingest from S3, authenticated API ingest with
+  cursor pagination (Stripe as worked example), scheduled dbt runs, and
+  ML training with MLflow autolog. Each ships a `workflow.yaml` with the
+  notebook content inlined, plus a standalone `notebook.py` on GitHub for
+  clean review.
 
 ## License
 

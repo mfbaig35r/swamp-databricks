@@ -45,7 +45,7 @@ const SecretMetaResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/secret",
-  version: "2026.05.30.15",
+  version: "2026.05.30.16",
   globalArguments: GlobalArgsSchema,
 
   resources: {

@@ -120,7 +120,7 @@ const LastStatementResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/sql_warehouse",
-  version: "2026.05.30.15",
+  version: "2026.05.30.16",
   globalArguments: GlobalArgsSchema,
 
   resources: {

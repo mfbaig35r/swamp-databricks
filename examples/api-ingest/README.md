@@ -5,8 +5,15 @@ APIs into a Delta Lake table, with a typed Silver view on top.
 
 Reference implementation: [met-museum](./met-museum). The Met Museum API
 needs no authentication, which makes it the easiest "hello world" for this
-pattern. Adapt to authenticated APIs (Stripe, GitHub, Salesforce, etc.) by
-changing the configuration block at the top of the bronze notebook.
+pattern.
+
+For authenticated APIs with cursor pagination (Stripe, GitHub, Salesforce,
+etc.), see the
+[`api-ingest-authenticated/`](../agent-templates/api-ingest-authenticated/)
+template under `agent-templates/`. Same engine, plus a `secret_scope` +
+`secret.put` step at the top of the workflow and a `build_headers()`
+function that reads the token via `dbutils.secrets.get`. Per‑pattern
+configuration block changes only.
 
 ## Architecture
 

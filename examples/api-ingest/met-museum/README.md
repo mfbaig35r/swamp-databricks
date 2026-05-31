@@ -87,10 +87,13 @@ For a public‑no‑auth API similar to Met, you can clone this directory,
 update the config block + Silver SQL, and have a working pipeline in
 under an hour.
 
-For authenticated APIs (Stripe, GitHub, Salesforce): add a
-`secret_scope.create_or_update` + `secret.put` step at the start of the
-workflow, then read the token in `build_headers()` via
-`dbutils.secrets.get(scope, key)`.
+For authenticated APIs with cursor pagination (Stripe, GitHub, Salesforce):
+see the
+[`api-ingest-authenticated/`](../../agent-templates/api-ingest-authenticated/)
+template under `agent-templates/`. It uses the same universal engine plus
+`secret_scope` + `secret.put` steps at the start of the workflow and a
+`build_headers()` that reads the token via `dbutils.secrets.get`. Stripe
+customers is the worked example.
 
 ## Known limitations of this reference
 
