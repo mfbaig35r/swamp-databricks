@@ -156,3 +156,16 @@ steps:
     arguments:
       run_id: ${{ steps.trigger.outputs.run_id }}
       timeout_seconds: 7200
+
+  # 4. OPTIONAL: grant downstream consumers SELECT on the predictions
+  # table. Uncomment + customize after the first successful run.
+  #
+  # - id: grants
+  #   model: "@mfbaig35r/databricks/uc_permissions"
+  #   method: update
+  #   arguments:
+  #     securable_type: table
+  #     full_name: ${{ inputs.predictions_table }}
+  #     changes:
+  #       - principal: "data-science-team"
+  #         add: ["SELECT"]

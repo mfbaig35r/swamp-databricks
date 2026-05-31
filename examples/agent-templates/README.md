@@ -82,3 +82,12 @@ live on GitHub at the link in each template's README. The same Python
 is inlined in `workflow.yaml` under `notebook.upload`'s `content:`
 field, so the workflow runs directly from the pulled archive without
 the standalone file.
+
+**Drift warning**: the `notebook.py` and the inlined copy inside
+`workflow.yaml` are two copies of the same code. They drift easily.
+**The `workflow.yaml` copy is what actually runs.** If you edit one,
+edit the other. When forking a template, update both. Future
+versions of this pack may add a generator step to derive the inlined
+copy from the standalone source automatically; for now, treat
+`notebook.py` as the canonical reviewable version and check the
+inlined copy against it before pushing changes.

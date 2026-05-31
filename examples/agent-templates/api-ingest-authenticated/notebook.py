@@ -190,6 +190,12 @@ results_df = (
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TARGET_CATALOG}.{TARGET_SCHEMA}")
 full_table = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{TARGET_BRONZE_TABLE}"
+# WRITE MODE: this template defaults to "overwrite" because it does a full
+# pull every run. If you change the list-fetch loop to use an incremental
+# filter (e.g. Stripe's created[gte]=<last_run>), switch this to
+# mode("append") AND add a MERGE INTO step downstream to dedupe on
+# object_id. Failing to change the mode will silently wipe yesterday's
+# data on every run.
 results_df.write.mode("overwrite").saveAsTable(full_table)
 
 row_count = spark.table(full_table).count()

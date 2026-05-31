@@ -198,3 +198,16 @@ steps:
     method: read
     arguments:
       full_name: ${{ inputs.target_table }}_silver
+
+  # 8. OPTIONAL: grant downstream consumers SELECT on the silver table.
+  # Uncomment + customize after the first successful run.
+  #
+  # - id: grants
+  #   model: "@mfbaig35r/databricks/uc_permissions"
+  #   method: update
+  #   arguments:
+  #     securable_type: table
+  #     full_name: ${{ inputs.target_table }}_silver
+  #     changes:
+  #       - principal: "account users"
+  #         add: ["SELECT"]
