@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mfbaig35r/databricks"
-version: "2026.05.30.12"
+version: "2026.05.30.13"
 description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks/files, secrets, Unity Catalog, permissions, DBSQL queries, and Git Repos as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
 repository: "https://github.com/mfbaig35r/swamp-databricks"
 labels:
@@ -37,33 +37,29 @@ models:
 additionalFiles:
   - README.md
   - LICENSE.txt
+  - examples/api-ingest/README.md
+  - examples/api-ingest/met-museum/README.md
+  - examples/api-ingest/met-museum/workflow.yaml
 releaseNotes: |
-  v0.12 (2026.05.30.12) - examples/api-ingest reference implementation
+  v0.13 (2026.05.30.13) - examples actually ship in the archive
 
-  Adds a documented reference pattern for the most common Databricks
-  question: "how do I pull data from an external API into a Delta table?"
+  Packaging fix. v0.12 added examples/api-ingest/ to the GitHub repo but
+  the manifest's additionalFiles only listed README.md and LICENSE.txt,
+  so the published archive on swamp.club did not include the examples
+  themselves. The README that shipped referenced examples/ paths that
+  did not resolve in pulled copies.
 
-  examples/api-ingest/README.md describes the universal architecture:
-  - Bronze raw_json + metadata columns (schema-drift immune)
-  - Silver typed extraction via SQL
-  - Rate-limited Spark fan-out using mapInPandas (NOT rdd.mapPartitions;
-    serverless rejects RDD ops)
-  - Token bucket per partition, single Session per partition, retries
-    on 429/5xx only
+  v0.13 lists the publishable example files in additionalFiles:
+  - examples/api-ingest/README.md
+  - examples/api-ingest/met-museum/README.md
+  - examples/api-ingest/met-museum/workflow.yaml
 
-  examples/api-ingest/met-museum/ is the runnable reference. The Met
-  Museum API is public (no auth), so the workflow runs on Databricks
-  Free out of the box.
+  The workflow.yaml is self-contained (notebook Python and Silver SQL
+  are inlined), so running the example from a pulled copy works.
 
-  - workflow.yaml: full Swamp workflow that ties uc_schema, notebook,
-    job, sql_warehouse, and uc_table together end-to-end.
-  - notebook-bronze.py: standalone reviewable notebook source.
-  - silver-typed.sql: SQL transform from Bronze to Silver.
-  - README.md: Met-specific runtime expectations, limitations.
+  The standalone notebook-bronze.py and silver-typed.sql files stay
+  GitHub-only because Swamp's safety analyzer restricts the archive
+  to .ts .json .md .yaml .yml .txt extensions. The Met README links
+  to GitHub for those two files.
 
-  Validated end-to-end with MAX_OBJECTS=10 on Databricks Free serverless:
-  TERMINATED + SUCCESS in ~30 sec wall, 10 rows in Bronze (100% success),
-  10 typed rows in Silver including real Met records (e.g.
-  "One-dollar Liberty Head Coin" by James Barton Longacre).
-
-  No code changes from v0.11. No new models. Documentation-only release.
+  No code changes from v0.12.

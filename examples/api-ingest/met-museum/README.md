@@ -43,18 +43,20 @@ compute). Bumping `NUM_PARTITIONS` doesn't help past 80 req/sec total.
 
 ## Files
 
-- [`notebook-bronze.py`](./notebook-bronze.py) — the Databricks Python
-  notebook source. Config block at top, universal engine below. This is
-  the canonical, reviewable source.
-- [`silver-typed.sql`](./silver-typed.sql) — the SQL transform from
-  `bronze_objects` to `silver_objects`. Pure SQL, runs on any SQL
-  warehouse.
 - [`workflow.yaml`](./workflow.yaml) — the Swamp workflow that ties it
   together: ensure schema exists, upload notebook, define job, run + wait,
-  run Silver transform, snapshot result. The notebook content is inlined
-  in the workflow for self-contained execution; the standalone
-  `notebook-bronze.py` is the recommended editing surface (then copy back
-  into the workflow).
+  run Silver transform, snapshot result. **The notebook Python and Silver
+  SQL are both inlined in this file**, so it's fully self-contained and
+  runnable directly.
+- [`notebook-bronze.py`](https://github.com/mfbaig35r/swamp-databricks/blob/main/examples/api-ingest/met-museum/notebook-bronze.py) — the standalone notebook source, for clean review
+  and editing. **GitHub-only**: the Swamp registry restricts published
+  archives to `.ts .json .md .yaml .yml .txt` extensions, so `.py` files
+  don't ship in the pulled archive. The same Python lives inside
+  `workflow.yaml` under the `notebook.upload` step's `content:` field.
+- [`silver-typed.sql`](https://github.com/mfbaig35r/swamp-databricks/blob/main/examples/api-ingest/met-museum/silver-typed.sql) — the standalone Silver SQL, for clean review.
+  **GitHub-only**: same `.sql` extension restriction as above. The SQL
+  is inlined in `workflow.yaml` under the `sql_warehouse.run_query`
+  step's `statement:` field.
 
 ## Running it
 
