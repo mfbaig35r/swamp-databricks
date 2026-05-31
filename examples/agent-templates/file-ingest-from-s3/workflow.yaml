@@ -1,0 +1,200 @@
+# File ingest from S3 -> UC Bronze + Silver template.
+#
+# Smoke test: swamp workflow run workflow.yaml --input max_files=1
+# Production: drop max_files, add `schedule:` field.
+
+name: file-ingest-from-s3
+description: >
+  Land files from S3 into a UC Bronze table with metadata, then build a
+  typed Silver view. Simple Spark inferSchema by default; replace
+  notebook body with AGI's ingest_to_evidence for production schema
+  detection.
+
+inputs:
+  catalog:
+    description: "Target UC catalog (workspace on Free Edition)"
+    default: workspace
+  s3_path:
+    description: "S3 prefix to read from, e.g. s3://my-bucket/vendor/customers/"
+  file_pattern:
+    description: "Glob pattern, e.g. *.csv or customer-*.csv"
+    default: "*.csv"
+  target_table:
+    description: "Bronze table to write, e.g. workspace.vendor.customers_bronze"
+  warehouse_ref:
+    description: "Swamp resource name for the SQL warehouse used for Silver"
+    default: warehouse
+  max_files:
+    description: "Limit number of files for smoke testing. Empty for production."
+    default: ""
+
+steps:
+  # 1. Configure S3 auth: secret scope + AWS creds
+  - id: scope
+    model: "@mfbaig35r/databricks/secret_scope"
+    method: create_or_update
+    arguments:
+      scope: s3_creds
+
+  - id: aws_access_key
+    model: "@mfbaig35r/databricks/secret"
+    method: put
+    arguments:
+      scope: s3_creds
+      key: aws_access_key_id
+      string_value: ${{ vault.get("s3_creds", "aws_access_key_id") }}
+
+  - id: aws_secret_key
+    model: "@mfbaig35r/databricks/secret"
+    method: put
+    arguments:
+      scope: s3_creds
+      key: aws_secret_access_key
+      string_value: ${{ vault.get("s3_creds", "aws_secret_access_key") }}
+
+  # 2. Ensure the target catalog/schema chain exists
+  - id: schema
+    model: "@mfbaig35r/databricks/uc_schema"
+    method: create_or_update
+    arguments:
+      name: vendor_drops   # TODO: change to the schema implied by target_table
+      catalog_name: ${{ inputs.catalog }}
+
+  # 3. Upload the bronze-ingest notebook
+  - id: upload_notebook
+    model: "@mfbaig35r/databricks/notebook"
+    method: upload
+    arguments:
+      path: /Shared/jobs/file-ingest-from-s3
+      language: PYTHON
+      overwrite: true
+      content: |
+        # Databricks notebook source
+        # Generic file-ingest-from-S3 template. See README.md for AGI integration notes.
+
+        S3_BUCKET_AND_PREFIX = None
+        FILE_PATTERN = None
+        TARGET_TABLE = None
+        FILE_FORMAT = "csv"
+        CSV_HEADER = True
+        CSV_INFER_SCHEMA = True
+        CSV_DELIMITER = ","
+        CSV_NULL_VALUE = ""
+        MAX_FILES = None
+
+        try: S3_BUCKET_AND_PREFIX = dbutils.widgets.get("s3_path") or S3_BUCKET_AND_PREFIX
+        except Exception: pass
+        try: FILE_PATTERN = dbutils.widgets.get("file_pattern") or FILE_PATTERN
+        except Exception: pass
+        try: TARGET_TABLE = dbutils.widgets.get("target_table") or TARGET_TABLE
+        except Exception: pass
+        try:
+            _mf = dbutils.widgets.get("max_files")
+            MAX_FILES = int(_mf) if _mf else MAX_FILES
+        except Exception: pass
+
+        assert S3_BUCKET_AND_PREFIX, "s3_path must be set"
+        assert FILE_PATTERN, "file_pattern must be set"
+        assert TARGET_TABLE, "target_table must be set"
+
+        try:
+            aws_access_key = dbutils.secrets.get("s3_creds", "aws_access_key_id")
+            aws_secret_key = dbutils.secrets.get("s3_creds", "aws_secret_access_key")
+            spark.conf.set("fs.s3a.access.key", aws_access_key)
+            spark.conf.set("fs.s3a.secret.key", aws_secret_key)
+            print("S3 credentials configured from secret scope")
+        except Exception as e:
+            print(f"No secret scope s3_creds found; relying on workspace S3 access ({e})")
+
+        from pyspark.sql import functions as F
+        read_path = f"{S3_BUCKET_AND_PREFIX.rstrip('/')}/{FILE_PATTERN}"
+        print(f"Reading {FILE_FORMAT} from {read_path}")
+
+        reader = spark.read.format(FILE_FORMAT)
+        if FILE_FORMAT == "csv":
+            reader = (
+                reader
+                .option("header", str(CSV_HEADER).lower())
+                .option("inferSchema", str(CSV_INFER_SCHEMA).lower())
+                .option("sep", CSV_DELIMITER)
+                .option("nullValue", CSV_NULL_VALUE)
+            )
+
+        raw_df = reader.load(read_path)
+        raw_df = raw_df.withColumn("source_file", F.input_file_name())
+        raw_df = raw_df.withColumn("ingested_at", F.current_timestamp())
+
+        if MAX_FILES is not None and MAX_FILES > 0:
+            distinct_files = raw_df.select("source_file").distinct().limit(MAX_FILES)
+            raw_df = raw_df.join(F.broadcast(distinct_files), on="source_file", how="inner")
+            print(f"MAX_FILES={MAX_FILES} applied")
+
+        target_catalog, target_schema, target_table = TARGET_TABLE.split(".")
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_catalog}.{target_schema}")
+        raw_df.write.mode("overwrite").saveAsTable(TARGET_TABLE)
+        row_count = spark.table(TARGET_TABLE).count()
+        print(f"Wrote {row_count} rows to {TARGET_TABLE}")
+
+        import json
+        dbutils.notebook.exit(json.dumps({
+            "rows": int(row_count),
+            "table": TARGET_TABLE,
+            "source": read_path,
+        }))
+
+  # 4. Define the job
+  - id: bronze_job
+    model: "@mfbaig35r/databricks/job"
+    method: create_or_update
+    arguments:
+      name: file-ingest-from-s3
+      tasks:
+        - task_key: ingest
+          notebook_task:
+            notebook_path: /Shared/jobs/file-ingest-from-s3
+            base_parameters:
+              s3_path: ${{ inputs.s3_path }}
+              file_pattern: ${{ inputs.file_pattern }}
+              target_table: ${{ inputs.target_table }}
+              max_files: ${{ inputs.max_files }}
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+
+  # 5. Trigger and wait
+  - id: trigger
+    model: "@mfbaig35r/databricks/job"
+    method: run
+    arguments:
+      job_ref: file-ingest-from-s3
+
+  - id: wait
+    model: "@mfbaig35r/databricks/job"
+    method: wait_run
+    arguments:
+      run_id: ${{ steps.trigger.outputs.run_id }}
+      timeout_seconds: 3600
+
+  # 6. Build Silver via SQL warehouse.
+  #
+  # TODO: replace this with your real typed extraction. The example below
+  # just renames columns and casts a few; customize for your schema.
+  - id: silver
+    model: "@mfbaig35r/databricks/sql_warehouse"
+    method: run_query
+    arguments:
+      warehouse_ref: ${{ inputs.warehouse_ref }}
+      wait_timeout_seconds: 50
+      statement: |
+        CREATE OR REPLACE TABLE ${{ inputs.target_table }}_silver AS
+        SELECT
+            -- TODO: list typed columns from your source
+            *,
+            ingested_at AS silver_ingested_at
+        FROM ${{ inputs.target_table }}
+
+  # 7. Snapshot
+  - id: snapshot
+    model: "@mfbaig35r/databricks/uc_table"
+    method: read
+    arguments:
+      full_name: ${{ inputs.target_table }}_silver

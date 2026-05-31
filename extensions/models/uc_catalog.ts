@@ -46,7 +46,7 @@ const CatalogResourceSchema = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_catalog",
-  version: "2026.05.30.13",
+  version: "2026.05.30.15",
   globalArguments: GlobalArgsSchema,
 
   resources: {

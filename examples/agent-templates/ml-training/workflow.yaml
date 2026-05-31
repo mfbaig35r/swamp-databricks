@@ -1,0 +1,158 @@
+# ML training template.
+#
+# Smoke test: swamp workflow run workflow.yaml --input max_rows=1000
+# Production: drop max_rows, set actual training_table, add `schedule:`.
+
+name: ml-training
+description: >
+  Train a model on data in a UC table, log to MLflow, optionally write
+  predictions to a UC predictions table.
+
+inputs:
+  catalog:
+    description: "Target UC catalog"
+    default: workspace
+  training_table:
+    description: "Full UC name of training data, e.g. analytics.ml.features"
+  predictions_table:
+    description: "Optional. Full UC name to write test predictions to."
+    default: ""
+  experiment_name:
+    description: "MLflow experiment path, e.g. /Shared/experiments/my-model"
+  target_column:
+    description: "Name of the target/label column in training_table"
+    default: target
+  max_rows:
+    description: "Limit training rows for smoke testing. Empty for full data."
+    default: ""
+
+steps:
+  # 1. Ensure target schema for predictions exists (if writing predictions)
+  - id: schema
+    model: "@mfbaig35r/databricks/uc_schema"
+    method: create_or_update
+    arguments:
+      name: ml   # TODO: change to the schema implied by predictions_table
+      catalog_name: ${{ inputs.catalog }}
+
+  # 2. Upload training notebook (placeholder linear regression; replace
+  #    with your actual training code)
+  - id: upload_notebook
+    model: "@mfbaig35r/databricks/notebook"
+    method: upload
+    arguments:
+      path: /Shared/jobs/ml-training
+      language: PYTHON
+      overwrite: true
+      content: |
+        # Databricks notebook source
+        # See examples/agent-templates/ml-training/notebook.py for the
+        # standalone reviewable source.
+
+        TRAINING_TABLE = None
+        PREDICTIONS_TABLE = None
+        EXPERIMENT_NAME = None
+        TARGET_COLUMN = "target"
+        TEST_SIZE = 0.2
+        RANDOM_STATE = 42
+        MAX_ROWS = None
+
+        try: TRAINING_TABLE = dbutils.widgets.get("training_table") or TRAINING_TABLE
+        except Exception: pass
+        try: PREDICTIONS_TABLE = dbutils.widgets.get("predictions_table") or PREDICTIONS_TABLE
+        except Exception: pass
+        try: EXPERIMENT_NAME = dbutils.widgets.get("experiment_name") or EXPERIMENT_NAME
+        except Exception: pass
+        try: TARGET_COLUMN = dbutils.widgets.get("target_column") or TARGET_COLUMN
+        except Exception: pass
+        try:
+            _mr = dbutils.widgets.get("max_rows")
+            MAX_ROWS = int(_mr) if _mr else None
+        except Exception: pass
+
+        assert TRAINING_TABLE, "training_table required"
+        assert EXPERIMENT_NAME, "experiment_name required"
+
+        import mlflow
+        mlflow.autolog()
+        mlflow.set_experiment(EXPERIMENT_NAME)
+
+        train_df = spark.table(TRAINING_TABLE)
+        if MAX_ROWS: train_df = train_df.limit(MAX_ROWS)
+        print(f"Loaded {train_df.count()} rows from {TRAINING_TABLE}")
+
+        pdf = train_df.toPandas()
+        y = pdf[TARGET_COLUMN]
+        X = pdf.drop(columns=[TARGET_COLUMN])
+
+        from sklearn.model_selection import train_test_split
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import mean_squared_error, r2_score
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
+        )
+
+        with mlflow.start_run() as run:
+            # TODO: replace LinearRegression with your actual model
+            model = LinearRegression()
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            rmse = mean_squared_error(y_test, y_pred, squared=False)
+            r2 = r2_score(y_test, y_pred)
+            mlflow.log_metric("rmse_test", rmse)
+            mlflow.log_metric("r2_test", r2)
+            run_id = run.info.run_id
+            print(f"Run {run_id}: rmse={rmse:.4f}, r2={r2:.4f}")
+
+        if PREDICTIONS_TABLE:
+            import pandas as pd
+            preds = pd.DataFrame({
+                "predicted": y_pred, "actual": y_test.values, "run_id": run_id,
+            })
+            pred_df = spark.createDataFrame(preds)
+            tc, ts, tt = PREDICTIONS_TABLE.split(".")
+            spark.sql(f"CREATE SCHEMA IF NOT EXISTS {tc}.{ts}")
+            pred_df.write.mode("overwrite").saveAsTable(PREDICTIONS_TABLE)
+            print(f"Wrote predictions to {PREDICTIONS_TABLE}")
+
+        import json
+        dbutils.notebook.exit(json.dumps({
+            "run_id": run_id,
+            "experiment": EXPERIMENT_NAME,
+            "rmse": float(rmse),
+            "r2": float(r2),
+            "predictions_table": PREDICTIONS_TABLE,
+        }))
+
+  # 3. Define the job
+  - id: training_job
+    model: "@mfbaig35r/databricks/job"
+    method: create_or_update
+    arguments:
+      name: ml-training
+      tasks:
+        - task_key: train
+          notebook_task:
+            notebook_path: /Shared/jobs/ml-training
+            base_parameters:
+              training_table: ${{ inputs.training_table }}
+              predictions_table: ${{ inputs.predictions_table }}
+              experiment_name: ${{ inputs.experiment_name }}
+              target_column: ${{ inputs.target_column }}
+              max_rows: ${{ inputs.max_rows }}
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+
+  - id: trigger
+    model: "@mfbaig35r/databricks/job"
+    method: run
+    arguments:
+      job_ref: ml-training
+
+  - id: wait
+    model: "@mfbaig35r/databricks/job"
+    method: wait_run
+    arguments:
+      run_id: ${{ steps.trigger.outputs.run_id }}
+      timeout_seconds: 7200

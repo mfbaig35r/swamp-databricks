@@ -51,7 +51,7 @@ const ExportArgs = z.object({
  */
 export const model = {
   type: "@mfbaig35r/databricks/notebook",
-  version: "2026.05.30.13",
+  version: "2026.05.30.15",
   globalArguments: GlobalArgsSchema,
 
   resources: {

@@ -1,0 +1,98 @@
+# Scheduled dbt run template.
+#
+# Smoke test: swamp workflow run workflow.yaml --input commands_mode=smoke
+# Production: drop commands_mode, add `schedule:` field.
+
+name: dbt-nightly
+description: >
+  Pull a dbt project from Git and run dbt deps + run + test on a SQL
+  warehouse. Idempotent across reruns.
+
+inputs:
+  catalog:
+    description: "Target UC catalog (workspace on Free)"
+    default: workspace
+  target_schema:
+    description: "Schema dbt writes into"
+    default: dbt_prod
+  repo_name:
+    description: "Swamp-side handle for the repo"
+    default: dbt-project
+  repo_url:
+    description: "Git URL of the dbt project"
+    # TODO: replace with your actual repo
+    default: https://github.com/dbt-labs/jaffle_shop
+  branch:
+    description: "Git branch to track"
+    default: main
+  warehouse_id:
+    description: "Databricks SQL warehouse ID (run `swamp model method run <warehouse-ref> list` to find it)"
+  commands_mode:
+    description: "production | smoke. smoke runs dbt run --select tag:smoke instead of full project."
+    default: production
+
+steps:
+  # 1. Attach the dbt project to the workspace
+  - id: repo
+    model: "@mfbaig35r/databricks/repo"
+    method: create_or_update
+    arguments:
+      name: ${{ inputs.repo_name }}
+      url: ${{ inputs.repo_url }}
+      provider: gitHub
+      branch: ${{ inputs.branch }}
+
+  # 2. Pull latest before running
+  - id: pull
+    model: "@mfbaig35r/databricks/repo"
+    method: pull
+    arguments:
+      repo_ref: ${{ inputs.repo_name }}
+
+  # 3. Ensure target schema exists
+  - id: schema
+    model: "@mfbaig35r/databricks/uc_schema"
+    method: create_or_update
+    arguments:
+      name: ${{ inputs.target_schema }}
+      catalog_name: ${{ inputs.catalog }}
+
+  # 4. Define the dbt job.
+  #
+  # Note: this template hardcodes the production vs smoke command lists.
+  # In a real workflow you'd template the list itself via inputs. The
+  # Swamp workflow runner supports CEL conditionals on step inclusion;
+  # the simpler approach is two workflow files (one smoke, one prod).
+  - id: job
+    model: "@mfbaig35r/databricks/job"
+    method: create_or_update
+    arguments:
+      name: dbt-nightly
+      tasks:
+        - task_key: deps_run_test
+          dbt_task:
+            commands:
+              - "dbt deps"
+              - "dbt run --target prod"  # TODO: switch to "dbt run --select tag:smoke" for smoke mode
+              - "dbt test --target prod"
+            warehouse_id: ${{ inputs.warehouse_id }}
+            project_directory: /Repos/${{ inputs.repo_name }}
+            catalog: ${{ inputs.catalog }}
+            schema: ${{ inputs.target_schema }}
+            source: WORKSPACE
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+
+  # 5. Trigger and wait
+  - id: trigger
+    model: "@mfbaig35r/databricks/job"
+    method: run
+    arguments:
+      job_ref: dbt-nightly
+
+  - id: wait
+    model: "@mfbaig35r/databricks/job"
+    method: wait_run
+    arguments:
+      run_id: ${{ steps.trigger.outputs.run_id }}
+      timeout_seconds: 3600

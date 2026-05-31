@@ -1,0 +1,236 @@
+# Authenticated API ingest -> UC Bronze + Silver template.
+# Stripe customers as the worked example.
+#
+# Smoke test: swamp workflow run workflow.yaml --input max_records=10
+# Production: drop max_records, add `schedule:` field, switch to
+# incremental pull via the list endpoint's created[gte] filter.
+
+name: stripe-customers-bronze
+description: >
+  Pull Stripe customers into a UC Bronze table with raw JSON, then
+  build a typed Silver view. Same engine as the Met Museum example
+  with Bearer auth + cursor pagination + secret-scope creds.
+
+inputs:
+  catalog:
+    description: "Target UC catalog (workspace on Free Edition)"
+    default: workspace
+  max_records:
+    description: "Limit records for smoke testing. Empty for full pull."
+    default: ""
+  warehouse_ref:
+    description: "Swamp resource name for the SQL warehouse used for Silver"
+    default: warehouse
+
+steps:
+  # 1. Secret scope + Stripe API key
+  - id: scope
+    model: "@mfbaig35r/databricks/secret_scope"
+    method: create_or_update
+    arguments:
+      scope: stripe
+
+  - id: api_key
+    model: "@mfbaig35r/databricks/secret"
+    method: put
+    arguments:
+      scope: stripe
+      key: api_key
+      string_value: ${{ vault.get("stripe", "api_key") }}
+
+  # 2. Ensure target schema exists
+  - id: schema
+    model: "@mfbaig35r/databricks/uc_schema"
+    method: create_or_update
+    arguments:
+      name: stripe
+      catalog_name: ${{ inputs.catalog }}
+
+  # 3. Upload bronze notebook (config-block-at-top pattern)
+  - id: upload_notebook
+    model: "@mfbaig35r/databricks/notebook"
+    method: upload
+    arguments:
+      path: /Shared/jobs/stripe-customers-bronze
+      language: PYTHON
+      overwrite: true
+      content: |
+        # Databricks notebook source
+        # See examples/agent-templates/api-ingest-authenticated/notebook.py
+        # for the canonical reviewable source. This inlined copy is what
+        # actually runs.
+
+        API_NAME = "stripe"
+        API_BASE = "https://api.stripe.com"
+        LIST_ENDPOINT = "/v1/customers"
+        PAGE_SIZE = 100
+        RATE_PER_SEC = 100
+        NUM_PARTITIONS = 10
+        REQUEST_TIMEOUT_SEC = 30
+        RETRY_MAX_ATTEMPTS = 3
+        TARGET_CATALOG = "workspace"
+        TARGET_SCHEMA = "stripe"
+        TARGET_BRONZE_TABLE = "bronze_customers"
+
+        try: TARGET_CATALOG = dbutils.widgets.get("catalog") or TARGET_CATALOG
+        except Exception: pass
+        try:
+            _mr = dbutils.widgets.get("max_records")
+            MAX_RECORDS = int(_mr) if _mr else None
+        except Exception: MAX_RECORDS = None
+
+        def build_headers():
+            api_key = dbutils.secrets.get("stripe", "api_key")
+            return {"Authorization": f"Bearer {api_key}"}
+
+        def parse_list_response(j):
+            return [o["id"] for o in j.get("data", [])]
+
+        import json, time, requests
+        from typing import Iterator
+        import pandas as pd
+        from pyspark.sql import functions as F
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        session = requests.Session()
+        session.headers.update(build_headers())
+        all_ids, cursor, page = [], None, 0
+        while True:
+            params = {"limit": PAGE_SIZE}
+            if cursor: params["starting_after"] = cursor
+            r = session.get(API_BASE + LIST_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT_SEC)
+            r.raise_for_status()
+            body = r.json()
+            page_ids = parse_list_response(body)
+            if not page_ids: break
+            all_ids.extend(page_ids); page += 1
+            print(f"{API_NAME}: page {page}, {len(page_ids)} ids (total {len(all_ids)})")
+            if not body.get("has_more"): break
+            cursor = page_ids[-1]
+            if MAX_RECORDS is not None and len(all_ids) >= MAX_RECORDS:
+                all_ids = all_ids[:MAX_RECORDS]; break
+
+        per_partition_rate = max(RATE_PER_SEC / NUM_PARTITIONS, 0.1)
+        DETAIL_URL_TEMPLATE = API_BASE + LIST_ENDPOINT + "/{id}"
+
+        def fetch_partition(it: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+            sess = requests.Session()
+            sess.headers.update(build_headers())
+            last_refill = time.monotonic()
+            tokens = per_partition_rate
+            for pdf in it:
+                rows_out = []
+                for object_id in pdf["id"]:
+                    now = time.monotonic()
+                    elapsed = now - last_refill
+                    tokens = min(per_partition_rate, tokens + elapsed * per_partition_rate)
+                    last_refill = now
+                    if tokens < 1:
+                        time.sleep((1 - tokens) / per_partition_rate); tokens = 0
+                    else:
+                        tokens -= 1
+                    url = DETAIL_URL_TEMPLATE.format(id=object_id)
+                    attempt = 0
+                    while True:
+                        try:
+                            resp = sess.get(url, timeout=REQUEST_TIMEOUT_SEC)
+                            status = resp.status_code
+                            if status == 200:
+                                rows_out.append((str(object_id), status, resp.text, None)); break
+                            if status == 404:
+                                rows_out.append((str(object_id), status, None, "not_found")); break
+                            if status in (429, 500, 502, 503, 504):
+                                attempt += 1
+                                if attempt >= RETRY_MAX_ATTEMPTS:
+                                    rows_out.append((str(object_id), status, None, f"retries_exhausted ({status})")); break
+                                time.sleep(2 ** attempt); continue
+                            rows_out.append((str(object_id), status, None, f"unexpected_status ({status})")); break
+                        except requests.exceptions.RequestException as exc:
+                            attempt += 1
+                            if attempt >= RETRY_MAX_ATTEMPTS:
+                                rows_out.append((str(object_id), 0, None, f"network_error: {exc}")); break
+                            time.sleep(2 ** attempt)
+                yield pd.DataFrame(rows_out, columns=["object_id", "http_status", "raw_json", "error_message"])
+
+        result_schema = StructType([
+            StructField("object_id", StringType(), True),
+            StructField("http_status", IntegerType(), True),
+            StructField("raw_json", StringType(), True),
+            StructField("error_message", StringType(), True),
+        ])
+        if not all_ids:
+            dbutils.notebook.exit(json.dumps({"rows": 0, "skipped": True}))
+
+        id_df = spark.createDataFrame([(str(i),) for i in all_ids], ["id"])
+        results_df = (
+            id_df.repartition(NUM_PARTITIONS)
+            .mapInPandas(fetch_partition, schema=result_schema)
+            .withColumn("ingested_at", F.current_timestamp())
+        )
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TARGET_CATALOG}.{TARGET_SCHEMA}")
+        full_table = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{TARGET_BRONZE_TABLE}"
+        results_df.write.mode("overwrite").saveAsTable(full_table)
+        row_count = spark.table(full_table).count()
+        success_count = spark.sql(f"SELECT COUNT(*) AS n FROM {full_table} WHERE http_status = 200").collect()[0]["n"]
+        print(f"{API_NAME}: {row_count} rows, {success_count} success, written to {full_table}")
+        dbutils.notebook.exit(json.dumps({"rows": int(row_count), "success": int(success_count), "table": full_table}))
+
+  # 4. Define the job
+  - id: bronze_job
+    model: "@mfbaig35r/databricks/job"
+    method: create_or_update
+    arguments:
+      name: stripe-customers-bronze
+      tasks:
+        - task_key: ingest
+          notebook_task:
+            notebook_path: /Shared/jobs/stripe-customers-bronze
+            base_parameters:
+              catalog: ${{ inputs.catalog }}
+              max_records: ${{ inputs.max_records }}
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+
+  - id: trigger
+    model: "@mfbaig35r/databricks/job"
+    method: run
+    arguments:
+      job_ref: stripe-customers-bronze
+
+  - id: wait
+    model: "@mfbaig35r/databricks/job"
+    method: wait_run
+    arguments:
+      run_id: ${{ steps.trigger.outputs.run_id }}
+      timeout_seconds: 7200
+
+  # 5. Silver typed extraction. Customize for the fields your reporting needs.
+  - id: silver
+    model: "@mfbaig35r/databricks/sql_warehouse"
+    method: run_query
+    arguments:
+      warehouse_ref: ${{ inputs.warehouse_ref }}
+      wait_timeout_seconds: 50
+      statement: |
+        CREATE OR REPLACE TABLE ${{ inputs.catalog }}.stripe.silver_customers AS
+        SELECT
+            object_id                                  AS customer_id,
+            CAST(raw_json:email AS STRING)             AS email,
+            CAST(raw_json:name AS STRING)              AS name,
+            CAST(raw_json:created AS BIGINT)           AS created_at_unix,
+            CAST(raw_json:description AS STRING)       AS description,
+            CAST(raw_json:phone AS STRING)             AS phone,
+            CAST(raw_json:currency AS STRING)          AS currency,
+            CAST(raw_json:delinquent AS BOOLEAN)       AS delinquent,
+            CAST(raw_json:livemode AS BOOLEAN)         AS livemode,
+            raw_json:address                           AS address_raw_json,
+            raw_json:metadata                          AS metadata_raw_json,
+            ingested_at
+        FROM ${{ inputs.catalog }}.stripe.bronze_customers
+        WHERE http_status = 200 AND raw_json IS NOT NULL
+
+  - id: snapshot
+    model: "@mfbaig35r/databricks/uc_table"
+    method: read
+    arguments:
+      full_name: ${{ inputs.catalog }}.stripe.silver_customers

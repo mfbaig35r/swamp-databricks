@@ -95,7 +95,7 @@ function resourceName(objectType: string, objectId: string): string {
  */
 export const model = {
   type: "@mfbaig35r/databricks/workspace_permissions",
-  version: "2026.05.30.13",
+  version: "2026.05.30.15",
   globalArguments: GlobalArgsSchema,
 
   resources: {

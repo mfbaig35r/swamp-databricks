@@ -308,6 +308,25 @@ steps:
 - SQL Warehouses: `@mfbaig35r/databricks/sql_warehouse`.
 - Azure MSI auth.
 
+## Authoring pipelines with Claude Code
+
+This pack ships a Claude Code skill at `.claude/skills/swamp-databricks-author/`
+that activates when you prompt Claude with things like:
+
+- "create a Databricks notebook that pulls X into a UC table"
+- "build a Swamp workflow that ingests Y"
+- "schedule a daily dbt run on warehouse Z"
+
+The skill generates a notebook plus a workflow.yaml plus a smoke test plan,
+following the canonical patterns this pack supports (file ingest with AGI,
+rate‑limited API ingest, dbt task, ML training). It enforces the disciplines
+that keep pipelines reproducible: bounded smoke tests, idempotent
+`create_or_update` steps, `mapInPandas` for fan‑out, raw JSON Bronze, CEL
+`vault.get` for credentials.
+
+After `swamp extension pull @mfbaig35r/databricks`, the skill is auto‑loaded
+into your Claude Code session for any repo where this extension is installed.
+
 ## Examples
 
 Reference workflows that combine multiple models live in
