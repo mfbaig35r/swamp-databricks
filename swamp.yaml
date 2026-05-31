@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mfbaig35r/databricks"
-version: "2026.05.30.17"
+version: "2026.05.30.18"
 description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks/files, secrets, Unity Catalog, permissions, DBSQL queries, and Git Repos as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
 repository: "https://github.com/mfbaig35r/swamp-databricks"
 labels:
@@ -34,6 +34,10 @@ models:
   - uc_permissions.ts
   - query.ts
   - repo.ts
+  - mlflow_experiment.ts
+  - registered_model.ts
+  - model_version.ts
+  - model_serving_endpoint.ts
 skills:
   - swamp-databricks-author
 additionalFiles:
@@ -52,26 +56,38 @@ additionalFiles:
   - examples/agent-templates/ml-training/README.md
   - examples/agent-templates/ml-training/workflow.yaml
 releaseNotes: |
-  v0.17 (2026.05.30.17) - Phase 4 smoke fixes
+  v0.18 (2026.05.30.18) - MLflow + UC Model Registry models
 
-  Real flags surfaced by Phase 4 smoke test (fresh subagent given a
-  Stripe-charges-ingest prompt with no skill context). Two template
-  fixes, one documentation reinforcement.
+  Four new models for the ML training-to-deployment lifecycle:
 
-  1. api-ingest-authenticated template: explicit warning comments in
-     both standalone notebook.py and inlined workflow.yaml content
-     pointing out that mode("overwrite") silently wipes incremental
-     data; switch to mode("append") + MERGE INTO if going incremental.
-  2. All four templates: added an optional `uc_permissions.update`
-     step at the end (commented out, with TODO). SKILL.md item #6
-     says to ask about downstream consumers but no template had a
-     structural slot for grants. Now they do.
-  3. agent-templates/README.md: explicit drift-warning section about
-     the notebook.py / inlined-workflow.yaml copy drift.
+  - @mfbaig35r/databricks/mlflow_experiment: create, read, update,
+    set_tag, delete, list, create_or_update. Workspace MLflow
+    experiment lifecycle. Smoke-validated end-to-end on Free.
+  - @mfbaig35r/databricks/registered_model: create, read, update,
+    delete, list, create_or_update. UC Model Registry (the
+    successor to the legacy workspace registry). Smoke-validated
+    end-to-end on Free.
+  - @mfbaig35r/databricks/model_version: create (from MLflow run),
+    read, update_alias (production/staging/champion), delete, list.
+    Schema-validated; end-to-end needs an MLflow run with a logged
+    model artifact (run ml-training template first to produce one).
+  - @mfbaig35r/databricks/model_serving_endpoint: create, read,
+    update_config, delete, list, invoke. PAID DATABRICKS ONLY -
+    schema-validated, end-to-end pending until paid workspace.
 
-  No skill changes (skill correctly forked the right template and
-  applied disciplines; flags were template content, not skill
-  behavior). No model changes.
+  ml-training template refactored to use the new models:
+  - mlflow_experiment.create_or_update at the top (ensures experiment
+    exists before the notebook calls mlflow.start_run)
+  - registered_model + model_version + update_alias steps after the
+    training job (commented out by default with TODO for the user to
+    enable after a successful run produces a run_id)
+  - model_serving_endpoint.create step at the end (commented out,
+    flagged paid-only)
 
-  Phase 4 verdict: skill loop works end-to-end. Smoke surfaced three
-  template-level improvements without hitting any skill or model bug.
+  SKILL.md updated: ML training section now documents the explicit
+  MLflow lifecycle as Swamp steps instead of "lives inside the
+  notebook."
+
+  Total models: 19. Closes the "MLflow models are on the roadmap"
+  item from the v0.17 close-out. Archive grows ~17 KB (4 new models +
+  template + skill updates).

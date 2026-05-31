@@ -10,52 +10,50 @@ import {
 } from "./_lib/databricks.ts";
 
 const CreateArgs = z.object({
-  name: z.string().min(1).max(255).describe("Schema name (NOT full_name)"),
-  catalog_name: z.string().describe(
-    "Parent catalog (e.g. 'workspace' on Free)",
-  ),
+  name: z.string().min(1).max(255).describe("Model name (NOT full_name)"),
+  catalog_name: z.string(),
+  schema_name: z.string(),
   comment: z.string().optional(),
-  properties: z.record(z.string(), z.string()).optional(),
-  storage_root: z.string().optional().describe(
-    "External storage root (managed-storage UC volumes path)",
+  storage_location: z.string().optional().describe(
+    "External storage URI for the model versions. UC-managed if omitted.",
   ),
 });
 
 const UpdateArgs = z.object({
-  schema_ref: z.string(),
-  new_name: z.string().optional(),
+  model_ref: z.string(),
   comment: z.string().optional(),
   owner: z.string().optional(),
-  properties: z.record(z.string(), z.string()).optional(),
 });
 
-const SchemaResourceSchema = z.object({
-  full_name: z.string().describe("<catalog>.<schema>"),
+const ModelResourceSchema = z.object({
+  full_name: z.string().describe("<catalog>.<schema>.<name>"),
   name: z.string(),
   catalog_name: z.string(),
+  schema_name: z.string(),
   owner: z.string().optional(),
   created_time_ms: z.number().int(),
   workspace_url: z.string().url(),
 });
 
 /**
- * `@mfbaig35r/databricks/uc_schema`: Unity Catalog schema (database) lifecycle.
- * Methods cover create, read, update, delete, list (by catalog).
+ * `@mfbaig35r/databricks/registered_model`: Unity Catalog registered model
+ * lifecycle. Pairs with `model_version` for versioning and
+ * `model_serving_endpoint` for deployment.
  *
- * On Databricks Free Edition the default catalog is `workspace`; pair this
- * model with workflows that ingest into a target schema you control.
+ * UC Model Registry is the recommended successor to the legacy workspace
+ * Model Registry. Use this model, not the workspace registry's API.
  *
- * @see https://docs.databricks.com/api/workspace/schemas
+ * @see https://docs.databricks.com/api/workspace/registeredmodels
  */
 export const model = {
-  type: "@mfbaig35r/databricks/uc_schema",
+  type: "@mfbaig35r/databricks/registered_model",
   version: "2026.05.30.18",
   globalArguments: GlobalArgsSchema,
 
   resources: {
-    "schema": {
-      description: "A Unity Catalog schema, keyed by user-supplied name.",
-      schema: SchemaResourceSchema,
+    "model": {
+      description: "A UC registered model, keyed by user-supplied name.",
+      schema: ModelResourceSchema,
       lifetime: "infinite" as const,
       garbageCollection: 5,
     },
@@ -63,7 +61,7 @@ export const model = {
 
   methods: {
     create: {
-      description: "Create a schema via POST /api/2.1/unity-catalog/schemas.",
+      description: "POST /api/2.1/unity-catalog/models.",
       arguments: CreateArgs,
       execute: async (
         args: z.infer<typeof CreateArgs>,
@@ -75,18 +73,19 @@ export const model = {
       ) => {
         const out = await dbxFetch(
           context.globalArgs,
-          "/api/2.1/unity-catalog/schemas",
+          "/api/2.1/unity-catalog/models",
           { method: "POST", body: JSON.stringify(args) },
         );
         const fullName = out.full_name as string;
         context.logger.info(
-          "Created schema {full_name}",
+          "Created registered model {full_name}",
           { full_name: fullName },
         );
-        const handle = await context.writeResource("schema", args.name, {
+        const handle = await context.writeResource("model", args.name, {
           full_name: fullName,
           name: args.name,
           catalog_name: args.catalog_name,
+          schema_name: args.schema_name,
           owner: out.owner as string | undefined,
           created_time_ms: Date.now(),
           workspace_url: context.globalArgs.workspace_url,
@@ -96,28 +95,28 @@ export const model = {
     },
 
     read: {
-      description: "GET /api/2.1/unity-catalog/schemas/{full_name}.",
-      arguments: z.object({ schema_ref: z.string() }),
+      description: "GET /api/2.1/unity-catalog/models/{full_name}.",
+      arguments: z.object({ model_ref: z.string() }),
       execute: async (
-        args: { schema_ref: string },
+        args: { model_ref: string },
         context: {
           globalArgs: GlobalArgs;
           readResource: ReadResource;
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.schema_ref);
+        const prior = await context.readResource(args.model_ref);
         if (!prior) {
           throw new Error(
-            `No stored 'schema' resource named '${args.schema_ref}'.`,
+            `No stored 'model' resource named '${args.model_ref}'.`,
           );
         }
         const live = await dbxFetch(
           context.globalArgs,
-          `/api/2.1/unity-catalog/schemas/${prior.full_name}`,
+          `/api/2.1/unity-catalog/models/${prior.full_name}`,
         );
         context.logger.info(
-          "Read schema {full_name}",
+          "Read registered model {full_name}",
           { full_name: prior.full_name },
         );
         return { dataHandles: [], outputs: { live } };
@@ -125,8 +124,7 @@ export const model = {
     },
 
     update: {
-      description:
-        "Update schema via PATCH /api/2.1/unity-catalog/schemas/{full_name}.",
+      description: "PATCH /api/2.1/unity-catalog/models/{full_name}.",
       arguments: UpdateArgs,
       execute: async (
         args: z.infer<typeof UpdateArgs>,
@@ -137,34 +135,29 @@ export const model = {
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.schema_ref);
+        const prior = await context.readResource(args.model_ref);
         if (!prior) {
           throw new Error(
-            `No stored 'schema' resource named '${args.schema_ref}'.`,
+            `No stored 'model' resource named '${args.model_ref}'.`,
           );
         }
         const patch: Record<string, unknown> = {};
-        if (args.new_name) patch.new_name = args.new_name;
         if (args.comment !== undefined) patch.comment = args.comment;
         if (args.owner) patch.owner = args.owner;
-        if (args.properties) patch.properties = args.properties;
-        const out = await dbxFetch(
+        await dbxFetch(
           context.globalArgs,
-          `/api/2.1/unity-catalog/schemas/${prior.full_name}`,
+          `/api/2.1/unity-catalog/models/${prior.full_name}`,
           { method: "PATCH", body: JSON.stringify(patch) },
         );
-        const fullName = (out.full_name ?? prior.full_name) as string;
         context.logger.info(
-          "Updated schema {full_name}",
-          { full_name: fullName },
+          "Updated registered model {full_name}",
+          { full_name: prior.full_name },
         );
         const handle = await context.writeResource(
-          "schema",
-          (args.new_name ?? prior.name) as string,
+          "model",
+          args.model_ref,
           {
             ...prior,
-            full_name: fullName,
-            name: (args.new_name ?? prior.name) as string,
             owner: (args.owner ?? prior.owner) as string | undefined,
           },
         );
@@ -173,34 +166,29 @@ export const model = {
     },
 
     delete: {
-      description: "DELETE /api/2.1/unity-catalog/schemas/{full_name}. " +
-        "Schema must be empty (no tables/volumes) unless force=true.",
-      arguments: z.object({
-        schema_ref: z.string(),
-        force: z.boolean().default(false),
-      }),
+      description: "DELETE /api/2.1/unity-catalog/models/{full_name}.",
+      arguments: z.object({ model_ref: z.string() }),
       execute: async (
-        args: { schema_ref: string; force: boolean },
+        args: { model_ref: string },
         context: {
           globalArgs: GlobalArgs;
           readResource: ReadResource;
           logger: Logger;
         },
       ) => {
-        const prior = await context.readResource(args.schema_ref);
+        const prior = await context.readResource(args.model_ref);
         if (!prior) {
           throw new Error(
-            `No stored 'schema' resource named '${args.schema_ref}'.`,
+            `No stored 'model' resource named '${args.model_ref}'.`,
           );
         }
-        const qs = args.force ? "?force=true" : "";
         await dbxFetch(
           context.globalArgs,
-          `/api/2.1/unity-catalog/schemas/${prior.full_name}${qs}`,
+          `/api/2.1/unity-catalog/models/${prior.full_name}`,
           { method: "DELETE" },
         );
         context.logger.info(
-          "Deleted schema {full_name}",
+          "Deleted registered model {full_name}",
           { full_name: prior.full_name },
         );
         return { dataHandles: [] };
@@ -208,37 +196,50 @@ export const model = {
     },
 
     list: {
-      description:
-        "List schemas in a catalog via GET /api/2.1/unity-catalog/schemas?catalog_name=...",
-      arguments: z.object({ catalog_name: z.string() }),
+      description: "List registered models in a catalog/schema via " +
+        "GET /api/2.1/unity-catalog/models.",
+      arguments: z.object({
+        catalog_name: z.string(),
+        schema_name: z.string(),
+        max_results: z.number().int().positive().max(1000).optional(),
+      }),
       execute: async (
-        args: { catalog_name: string },
+        args: {
+          catalog_name: string;
+          schema_name: string;
+          max_results?: number;
+        },
         context: { globalArgs: GlobalArgs; logger: Logger },
       ) => {
+        const qs = new URLSearchParams({
+          catalog_name: args.catalog_name,
+          schema_name: args.schema_name,
+        });
+        if (args.max_results) qs.set("max_results", String(args.max_results));
         const res = await dbxFetch(
           context.globalArgs,
-          `/api/2.1/unity-catalog/schemas?catalog_name=${
-            encodeURIComponent(args.catalog_name)
-          }`,
+          `/api/2.1/unity-catalog/models?${qs}`,
         );
-        const schemas = (res.schemas ?? []) as Array<{
+        const models = (res.registered_models ?? []) as Array<{
           full_name: string;
           name: string;
         }>;
         context.logger.info(
-          "Listed {count} schemas in catalog {catalog}",
-          { count: schemas.length, catalog: args.catalog_name },
+          "Listed {count} registered models in {catalog}.{schema}",
+          {
+            count: models.length,
+            catalog: args.catalog_name,
+            schema: args.schema_name,
+          },
         );
-        return { dataHandles: [], outputs: { schemas } };
+        return { dataHandles: [], outputs: { models } };
       },
     },
 
     create_or_update: {
       description:
-        "Reconcile against the workspace: GET the schema first; if it " +
-        "exists call PATCH, otherwise POST. Safe across Swamp tombstones " +
-        "(delete + create_or_update with the same name will correctly " +
-        "create rather than try to PATCH a missing schema).",
+        "Reconcile against the workspace: GET first; if exists call " +
+        "PATCH (comment only), otherwise POST. Safe across tombstones.",
       arguments: CreateArgs,
       execute: async (
         args: z.infer<typeof CreateArgs>,
@@ -248,28 +249,32 @@ export const model = {
           logger: Logger;
         },
       ) => {
-        const fullName = `${args.catalog_name}.${args.name}`;
+        const fullName =
+          `${args.catalog_name}.${args.schema_name}.${args.name}`;
         const exists = await existsOnWorkspace(
           context.globalArgs,
-          `/api/2.1/unity-catalog/schemas/${fullName}`,
+          `/api/2.1/unity-catalog/models/${fullName}`,
         );
         if (exists) {
-          const patch: Record<string, unknown> = {};
-          if (args.comment !== undefined) patch.comment = args.comment;
-          if (args.properties) patch.properties = args.properties;
-          await dbxFetch(
-            context.globalArgs,
-            `/api/2.1/unity-catalog/schemas/${fullName}`,
-            { method: "PATCH", body: JSON.stringify(patch) },
-          );
+          if (args.comment !== undefined) {
+            await dbxFetch(
+              context.globalArgs,
+              `/api/2.1/unity-catalog/models/${fullName}`,
+              {
+                method: "PATCH",
+                body: JSON.stringify({ comment: args.comment }),
+              },
+            );
+          }
           context.logger.info(
-            "create_or_update: patched existing schema {full_name}",
+            "create_or_update: adopted existing model {full_name}",
             { full_name: fullName },
           );
-          const handle = await context.writeResource("schema", args.name, {
+          const handle = await context.writeResource("model", args.name, {
             full_name: fullName,
             name: args.name,
             catalog_name: args.catalog_name,
+            schema_name: args.schema_name,
             created_time_ms: Date.now(),
             workspace_url: context.globalArgs.workspace_url,
           });
@@ -277,18 +282,19 @@ export const model = {
         }
         const out = await dbxFetch(
           context.globalArgs,
-          "/api/2.1/unity-catalog/schemas",
+          "/api/2.1/unity-catalog/models",
           { method: "POST", body: JSON.stringify(args) },
         );
         const createdFullName = out.full_name as string;
         context.logger.info(
-          "create_or_update: created new schema {full_name}",
+          "create_or_update: created new model {full_name}",
           { full_name: createdFullName },
         );
-        const handle = await context.writeResource("schema", args.name, {
+        const handle = await context.writeResource("model", args.name, {
           full_name: createdFullName,
           name: args.name,
           catalog_name: args.catalog_name,
+          schema_name: args.schema_name,
           owner: out.owner as string | undefined,
           created_time_ms: Date.now(),
           workspace_url: context.globalArgs.workspace_url,

@@ -97,9 +97,24 @@ and common failure modes.
 Template: [`examples/agent-templates/ml-training/`](../../../examples/agent-templates/ml-training/).
 Reads training data from a UC table, trains with scikit-learn
 (placeholder; swap for your model), logs to MLflow via `autolog`.
-Optionally writes predictions to a UC table. MLflow
-experiment/run/registered-model management lives inside the notebook
-for now; first-class swamp-databricks MLflow models are on the roadmap.
+Optionally writes predictions to a UC table.
+
+As of v0.18, the template uses explicit Swamp steps for the MLflow
+lifecycle around the training:
+
+- `mlflow_experiment.create_or_update` ensures the experiment exists
+  before the notebook calls `mlflow.start_run()`.
+- `registered_model.create_or_update` + `model_version.create` (both
+  commented out by default) register the trained model to UC Model
+  Registry once the notebook surfaces a `run_id` via
+  `dbutils.notebook.exit`.
+- `model_version.update_alias` (commented out) sets `production` /
+  `staging` / `champion` aliases for stage transitions.
+- `model_serving_endpoint.create` (commented out, **paid Databricks
+  only**) deploys a version to a real-time endpoint.
+
+The training itself still lives in the notebook (mlflow.autolog
+captures params/metrics/model). Swamp manages everything around it.
 
 ### Custom transform / orchestration
 

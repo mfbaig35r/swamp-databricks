@@ -108,6 +108,24 @@ that read/write into UC.
 `sql_warehouse.run_query` or a job notebook task with
 `CREATE TABLE` SQL, then `uc_table.read` captures the table snapshot.
 
+### `@mfbaig35r/databricks/mlflow_experiment` + `registered_model` + `model_version` + `model_serving_endpoint`
+
+MLflow + Unity Catalog Model Registry + model serving. The four pieces
+of the ML training‑to‑deployment lifecycle as composable Swamp models.
+
+| Model + method | API call |
+|---|---|
+| `mlflow_experiment.create`/`read`/`update`/`set_tag`/`delete`/`list`/`create_or_update` | `/api/2.0/mlflow/experiments/*` |
+| `registered_model.create`/`read`/`update`/`delete`/`list`/`create_or_update` | `/api/2.1/unity-catalog/models` |
+| `model_version.create`/`read`/`update_alias`/`delete`/`list` | `/api/2.1/unity-catalog/models/{full_name}/versions` |
+| `model_serving_endpoint.create`/`read`/`update_config`/`delete`/`list`/`invoke` | `/api/2.0/serving-endpoints` (**paid Databricks only**) |
+
+`mlflow_experiment` and `registered_model` are smoke‑validated end‑to‑end
+on Databricks Free. `model_version` is schema‑validated; end‑to‑end
+validation needs an MLflow run with a logged model artifact (run the
+`ml-training` template once to produce one). `model_serving_endpoint`
+ships schema‑validated; end‑to‑end is paid Databricks only.
+
 ### `@mfbaig35r/databricks/query`
 
 DBSQL saved queries. The `query_id` returned here is the same identifier

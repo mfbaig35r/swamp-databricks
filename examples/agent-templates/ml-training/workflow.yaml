@@ -35,6 +35,13 @@ steps:
       name: ml   # TODO: change to the schema implied by predictions_table
       catalog_name: ${{ inputs.catalog }}
 
+  # 1b. Ensure the MLflow experiment exists before training runs.
+  - id: experiment
+    model: "@mfbaig35r/databricks/mlflow_experiment"
+    method: create_or_update
+    arguments:
+      name: ${{ inputs.experiment_name }}
+
   # 2. Upload training notebook (placeholder linear regression; replace
   #    with your actual training code)
   - id: upload_notebook
@@ -157,7 +164,54 @@ steps:
       run_id: ${{ steps.trigger.outputs.run_id }}
       timeout_seconds: 7200
 
-  # 4. OPTIONAL: grant downstream consumers SELECT on the predictions
+  # 4. OPTIONAL: register the trained model to UC Model Registry.
+  # The notebook needs to log the model with mlflow.<flavor>.log_model
+  # AND surface the run_id via dbutils.notebook.exit so this step can
+  # consume it. Uncomment + customize the inputs (model_full_name,
+  # run_id source) after the first successful run.
+  #
+  # - id: register_model
+  #   model: "@mfbaig35r/databricks/registered_model"
+  #   method: create_or_update
+  #   arguments:
+  #     name: my_model        # the final segment; full_name = catalog.schema.name
+  #     catalog_name: ${{ inputs.catalog }}
+  #     schema_name: ml
+  #     comment: "Trained nightly by ml-training workflow"
+  #
+  # - id: register_version
+  #   model: "@mfbaig35r/databricks/model_version"
+  #   method: create
+  #   arguments:
+  #     model_ref: my_model
+  #     source: "runs:/${{ steps.wait.outputs.run_id }}/model"
+  #     run_id: ${{ steps.wait.outputs.run_id }}
+  #
+  # - id: set_production_alias
+  #   model: "@mfbaig35r/databricks/model_version"
+  #   method: update_alias
+  #   arguments:
+  #     model_ref: my_model
+  #     version: ${{ steps.register_version.outputs.version_number }}
+  #     alias: production
+
+  # 5. OPTIONAL: deploy to a real-time serving endpoint. Paid Databricks
+  # only; will fail on Databricks Free. Uncomment + customize after
+  # the registered model + version exist.
+  #
+  # - id: serve
+  #   model: "@mfbaig35r/databricks/model_serving_endpoint"
+  #   method: create
+  #   arguments:
+  #     name: my-model-endpoint
+  #     config:
+  #       served_entities:
+  #         - entity_name: ${{ inputs.catalog }}.ml.my_model
+  #           entity_version: "${{ steps.register_version.outputs.version_number }}"
+  #           workload_size: Small
+  #           scale_to_zero_enabled: true
+
+  # 6. OPTIONAL: grant downstream consumers SELECT on the predictions
   # table. Uncomment + customize after the first successful run.
   #
   # - id: grants
