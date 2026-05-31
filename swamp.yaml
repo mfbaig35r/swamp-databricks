@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mfbaig35r/databricks"
-version: "2026.05.30.11"
+version: "2026.05.30.12"
 description: "Databricks Jobs, DLT pipelines, SQL warehouses, workspace notebooks/files, secrets, Unity Catalog, permissions, DBSQL queries, and Git Repos as Swamp models. Compose Databricks pipelines with non-Databricks resources in Swamp workflows."
 repository: "https://github.com/mfbaig35r/swamp-databricks"
 labels:
@@ -38,22 +38,32 @@ additionalFiles:
   - README.md
   - LICENSE.txt
 releaseNotes: |
-  v0.11 (2026.05.30.11) - bug fix
+  v0.12 (2026.05.30.12) - examples/api-ingest reference implementation
 
-  Fix: create_or_update tombstone bug. Previously after `delete`,
-  readResource returned tombstoned data not null, so create_or_update
-  took the PATCH/PUT/reset path against a workspace resource that no
-  longer existed and 404'd. Affected: job, dlt_pipeline, sql_warehouse,
-  secret_scope, uc_catalog, uc_schema, uc_volume.
+  Adds a documented reference pattern for the most common Databricks
+  question: "how do I pull data from an external API into a Delta table?"
 
-  Fix is workspace-first reconciliation: each create_or_update now
-  checks the workspace via GET (or list for secret_scope) before
-  deciding which path to take. New helper existsOnWorkspace in
-  _lib/databricks.ts. Smoke-validated on Free: uc_schema and job
-  delete-then-create_or_update both correctly take create path now.
+  examples/api-ingest/README.md describes the universal architecture:
+  - Bronze raw_json + metadata columns (schema-drift immune)
+  - Silver typed extraction via SQL
+  - Rate-limited Spark fan-out using mapInPandas (NOT rdd.mapPartitions;
+    serverless rejects RDD ops)
+  - Token bucket per partition, single Session per partition, retries
+    on 429/5xx only
 
-  Side benefit: also handles out-of-band workspace deletes (someone
-  deletes the job via UI, then create_or_update via Swamp correctly
-  recreates instead of failing).
+  examples/api-ingest/met-museum/ is the runnable reference. The Met
+  Museum API is public (no auth), so the workflow runs on Databricks
+  Free out of the box.
 
-  No breaking changes from v0.10.
+  - workflow.yaml: full Swamp workflow that ties uc_schema, notebook,
+    job, sql_warehouse, and uc_table together end-to-end.
+  - notebook-bronze.py: standalone reviewable notebook source.
+  - silver-typed.sql: SQL transform from Bronze to Silver.
+  - README.md: Met-specific runtime expectations, limitations.
+
+  Validated end-to-end with MAX_OBJECTS=10 on Databricks Free serverless:
+  TERMINATED + SUCCESS in ~30 sec wall, 10 rows in Bronze (100% success),
+  10 typed rows in Silver including real Met records (e.g.
+  "One-dollar Liberty Head Coin" by James Barton Longacre).
+
+  No code changes from v0.11. No new models. Documentation-only release.

@@ -308,6 +308,17 @@ steps:
 - SQL Warehouses: `@mfbaig35r/databricks/sql_warehouse`.
 - Azure MSI auth.
 
+## Examples
+
+Reference workflows that combine multiple models live in
+[`examples/`](./examples/):
+
+- [`examples/api-ingest/`](./examples/api-ingest/) — the universal pattern
+  for pulling external HTTP APIs into Bronze + Silver Delta tables, with
+  rate‑limited Spark fan‑out and schema‑drift‑proof storage. Reference
+  implementation is [the Met Museum](./examples/api-ingest/met-museum/)
+  (public API, no auth required, runnable on Databricks Free).
+
 ## License
 
 Apache-2.0. See `LICENSE.txt`.

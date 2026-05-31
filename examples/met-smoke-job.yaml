@@ -1,0 +1,10 @@
+name: met-museum-smoke
+tasks:
+  - task_key: ingest
+    notebook_task:
+      notebook_path: /Shared/met-museum-bronze-ingest
+      base_parameters:
+        catalog: workspace
+        max_objects: "10"
+max_concurrent_runs: 1
+timeout_seconds: 600

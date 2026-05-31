@@ -83,7 +83,7 @@ function resourceName(securableType: string, fullName: string): string {
  */
 export const model = {
   type: "@mfbaig35r/databricks/uc_permissions",
-  version: "2026.05.30.11",
+  version: "2026.05.30.12",
   globalArguments: GlobalArgsSchema,
 
   resources: {

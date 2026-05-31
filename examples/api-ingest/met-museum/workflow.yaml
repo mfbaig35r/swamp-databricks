@@ -1,0 +1,260 @@
+# Met Museum -> Databricks (Bronze + Silver) Swamp workflow.
+#
+# Reference implementation of the universal API-ingest pattern. Adapt
+# to other APIs by changing the notebook content's configuration block
+# and the Silver SQL. See ../README.md for the breakdown.
+#
+# Required Swamp model instances (create these once in your repo):
+#   - @mfbaig35r/databricks/uc_schema        as `schemas`
+#   - @mfbaig35r/databricks/notebook         as `notebooks`
+#   - @mfbaig35r/databricks/job              as `jobs`
+#   - @mfbaig35r/databricks/sql_warehouse    as `warehouse`
+#   - @mfbaig35r/databricks/uc_table         as `tables`
+#
+# Each must have globalArguments configured with workspace_url + auth.
+# See README.md.
+
+name: met-museum-bronze-ingest
+description: >
+  Pull the Metropolitan Museum of Art's open collection into a Bronze +
+  Silver pair in Unity Catalog. Public API, no auth required.
+schedule: "0 4 1 * *"   # monthly full refresh, 04:00 UTC on the 1st
+
+inputs:
+  catalog:
+    description: "Target UC catalog (workspace on Free Edition)."
+    default: workspace
+  max_objects:
+    description: "Cap on number of objects to fetch. Leave blank for full ~470K pull."
+    default: ""
+
+steps:
+  # 1. Ensure target schema exists.
+  - id: schema
+    model: schemas
+    method: create_or_update
+    arguments:
+      name: met_museum
+      catalog_name: ${{ inputs.catalog }}
+
+  # 2. Upload the bronze-ingest notebook.
+  - id: upload_notebook
+    model: notebooks
+    method: upload
+    arguments:
+      path: /Shared/jobs/met-museum-bronze-ingest
+      language: PYTHON
+      overwrite: true
+      content: |
+        # Databricks notebook source
+        # Met Museum -> Bronze ingest. Universal API-ingest pattern.
+        # Configuration block at top; engine below is API-agnostic.
+
+        # === Configuration (CHANGE THIS for other APIs) =================
+        API_NAME = "met_museum"
+        LIST_URL = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
+        DETAIL_URL_TEMPLATE = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{id}"
+        RATE_PER_SEC = 80
+        NUM_PARTITIONS = 8
+        REQUEST_TIMEOUT_SEC = 30
+        RETRY_MAX_ATTEMPTS = 3
+
+        TARGET_CATALOG = "workspace"   # override via job parameter
+        TARGET_SCHEMA = "met_museum"
+        TARGET_BRONZE_TABLE = "bronze_objects"
+        try:
+            params = dbutils.widgets.getAll() if hasattr(dbutils.widgets, "getAll") else {}
+        except Exception:
+            params = {}
+        try:
+            TARGET_CATALOG = dbutils.widgets.get("catalog") or TARGET_CATALOG
+        except Exception:
+            pass
+        try:
+            _max = dbutils.widgets.get("max_objects")
+            MAX_OBJECTS = int(_max) if _max else None
+        except Exception:
+            MAX_OBJECTS = None
+
+        def build_headers():
+            # For authenticated APIs:
+            #   return {"Authorization": f"Bearer {dbutils.secrets.get('scope', 'key')}"}
+            return {}
+
+        def parse_list_response(response_json):
+            return response_json.get("objectIDs", []) or []
+
+        # === Universal engine (do NOT modify per API) ===================
+        # NOTE: uses mapInPandas (not rdd.mapPartitions). Databricks serverless
+        # rejects RDD operations; mapInPandas works on both serverless and
+        # classic clusters.
+        import json, time, requests
+        from typing import Iterator
+        import pandas as pd
+        from pyspark.sql import functions as F
+        from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
+
+        session = requests.Session()
+        session.headers.update(build_headers())
+        list_response = session.get(LIST_URL, timeout=REQUEST_TIMEOUT_SEC)
+        list_response.raise_for_status()
+        all_ids = parse_list_response(list_response.json())
+        print(f"{API_NAME}: list endpoint returned {len(all_ids)} IDs")
+        if MAX_OBJECTS is not None and MAX_OBJECTS > 0:
+            all_ids = all_ids[:MAX_OBJECTS]
+            print(f"{API_NAME}: limited to MAX_OBJECTS={MAX_OBJECTS}")
+
+        per_partition_rate = max(RATE_PER_SEC / NUM_PARTITIONS, 0.1)
+
+        def fetch_partition(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+            sess = requests.Session()
+            sess.headers.update(build_headers())
+            last_refill = time.monotonic()
+            tokens = per_partition_rate
+            for pdf in iterator:
+                rows_out = []
+                for object_id in pdf["id"]:
+                    now = time.monotonic()
+                    elapsed = now - last_refill
+                    tokens = min(per_partition_rate, tokens + elapsed * per_partition_rate)
+                    last_refill = now
+                    if tokens < 1:
+                        time.sleep((1 - tokens) / per_partition_rate)
+                        tokens = 0
+                    else:
+                        tokens -= 1
+                    url = DETAIL_URL_TEMPLATE.format(id=int(object_id))
+                    attempt = 0
+                    while True:
+                        try:
+                            resp = sess.get(url, timeout=REQUEST_TIMEOUT_SEC)
+                            status = resp.status_code
+                            if status == 200:
+                                rows_out.append((int(object_id), status, resp.text, None))
+                                break
+                            if status == 404:
+                                rows_out.append((int(object_id), status, None, "not_found"))
+                                break
+                            if status in (429, 500, 502, 503, 504):
+                                attempt += 1
+                                if attempt >= RETRY_MAX_ATTEMPTS:
+                                    rows_out.append((int(object_id), status, None, f"retries_exhausted ({status})"))
+                                    break
+                                time.sleep(2 ** attempt)
+                                continue
+                            rows_out.append((int(object_id), status, None, f"unexpected_status ({status})"))
+                            break
+                        except requests.exceptions.RequestException as exc:
+                            attempt += 1
+                            if attempt >= RETRY_MAX_ATTEMPTS:
+                                rows_out.append((int(object_id), 0, None, f"network_error: {exc}"))
+                                break
+                            time.sleep(2 ** attempt)
+                yield pd.DataFrame(rows_out, columns=["object_id", "http_status", "raw_json", "error_message"])
+
+        result_schema = StructType([
+            StructField("object_id", LongType(), True),
+            StructField("http_status", IntegerType(), True),
+            StructField("raw_json", StringType(), True),
+            StructField("error_message", StringType(), True),
+        ])
+        id_df = spark.createDataFrame([(int(i),) for i in all_ids], ["id"])
+        results_df = (
+            id_df.repartition(NUM_PARTITIONS)
+            .mapInPandas(fetch_partition, schema=result_schema)
+            .withColumn("ingested_at", F.current_timestamp())
+        )
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TARGET_CATALOG}.{TARGET_SCHEMA}")
+        full_table = f"{TARGET_CATALOG}.{TARGET_SCHEMA}.{TARGET_BRONZE_TABLE}"
+        results_df.write.mode("overwrite").saveAsTable(full_table)
+
+        row_count = spark.table(full_table).count()
+        success_count = spark.sql(
+            f"SELECT COUNT(*) AS n FROM {full_table} WHERE http_status = 200"
+        ).collect()[0]["n"]
+        print(f"{API_NAME}: wrote {row_count} rows ({success_count} 200) to {full_table}")
+        dbutils.notebook.exit(json.dumps({"rows": int(row_count), "success": int(success_count), "table": full_table}))
+
+  # 3. Define the bronze-ingest job (idempotent across reruns).
+  - id: bronze_job
+    model: jobs
+    method: create_or_update
+    arguments:
+      name: met-museum-bronze-ingest
+      tasks:
+        - task_key: ingest
+          notebook_task:
+            notebook_path: /Shared/jobs/met-museum-bronze-ingest
+            base_parameters:
+              catalog: ${{ inputs.catalog }}
+              max_objects: ${{ inputs.max_objects }}
+      max_concurrent_runs: 1
+      timeout_seconds: 7200   # 2 hours; full pull is ~100 min
+
+  # 4. Trigger and wait.
+  - id: trigger
+    model: jobs
+    method: run
+    arguments:
+      job_ref: met-museum-bronze-ingest
+
+  - id: wait
+    model: jobs
+    method: wait_run
+    arguments:
+      run_id: ${{ steps.trigger.outputs.run_id }}
+      poll_seconds: 30
+      timeout_seconds: 7200
+
+  # 5. Build the Silver table via SQL warehouse.
+  #
+  # Assumes you've already done sql_warehouse.adopt to register your
+  # workspace's Starter warehouse as 'warehouse' (or created a new one).
+  - id: silver
+    model: warehouse
+    method: run_query
+    arguments:
+      warehouse_ref: warehouse
+      wait_timeout_seconds: 50
+      statement: |
+        CREATE OR REPLACE TABLE ${{ inputs.catalog }}.met_museum.silver_objects AS
+        SELECT
+            object_id,
+            CAST(raw_json:objectID            AS BIGINT)  AS met_object_id,
+            CAST(raw_json:accessionNumber     AS STRING)  AS accession_number,
+            CAST(raw_json:accessionYear       AS STRING)  AS accession_year,
+            CAST(raw_json:isHighlight         AS BOOLEAN) AS is_highlight,
+            CAST(raw_json:isPublicDomain      AS BOOLEAN) AS is_public_domain,
+            CAST(raw_json:title               AS STRING)  AS title,
+            CAST(raw_json:objectDate          AS STRING)  AS object_date,
+            CAST(raw_json:objectBeginDate     AS INT)     AS object_begin_date,
+            CAST(raw_json:objectEndDate       AS INT)     AS object_end_date,
+            CAST(raw_json:medium              AS STRING)  AS medium,
+            CAST(raw_json:dimensions          AS STRING)  AS dimensions,
+            CAST(raw_json:classification      AS STRING)  AS classification,
+            CAST(raw_json:department          AS STRING)  AS department,
+            CAST(raw_json:culture             AS STRING)  AS culture,
+            CAST(raw_json:period              AS STRING)  AS period,
+            CAST(raw_json:dynasty             AS STRING)  AS dynasty,
+            CAST(raw_json:reign               AS STRING)  AS reign,
+            CAST(raw_json:artistDisplayName   AS STRING)  AS artist_display_name,
+            CAST(raw_json:artistDisplayBio    AS STRING)  AS artist_display_bio,
+            CAST(raw_json:artistRole          AS STRING)  AS artist_role,
+            CAST(raw_json:artistNationality   AS STRING)  AS artist_nationality,
+            CAST(raw_json:primaryImage        AS STRING)  AS primary_image_url,
+            CAST(raw_json:primaryImageSmall   AS STRING)  AS primary_image_small_url,
+            CAST(raw_json:objectURL           AS STRING)  AS object_url,
+            CAST(raw_json:tags                AS STRING)  AS tags_raw_json,
+            CAST(raw_json:measurements        AS STRING)  AS measurements_raw_json,
+            CAST(raw_json:additionalImages    AS STRING)  AS additional_images_raw_json,
+            CAST(raw_json:constituents        AS STRING)  AS constituents_raw_json,
+            ingested_at
+        FROM ${{ inputs.catalog }}.met_museum.bronze_objects
+        WHERE http_status = 200 AND raw_json IS NOT NULL
+
+  # 6. Snapshot Silver so downstream Swamp steps can chain.
+  - id: snapshot
+    model: tables
+    method: read
+    arguments:
+      full_name: ${{ inputs.catalog }}.met_museum.silver_objects
