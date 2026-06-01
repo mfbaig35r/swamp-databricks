@@ -317,14 +317,9 @@ steps:
 
 ## Roadmap
 
-- Expand Job task-type discriminated union (`spark_python_task`,
-  `python_wheel_task`, `dbt_task`, `run_job_task`, `for_each_task`,
-  `condition_task`, `spark_jar_task`).
-- Unity Catalog: `@mfbaig35r/databricks/uc_schema`, `uc_table`, `uc_volume`,
-  with grants.
-- Secrets: `@mfbaig35r/databricks/secret_scope`, `secret`.
-- SQL Warehouses: `@mfbaig35r/databricks/sql_warehouse`.
-- Azure MSI auth.
+- `azure_msi` auth (currently stubbed).
+- End-to-end smoke validation for `model_version` (needs an MLflow run with
+  a logged model artifact) and `model_serving_endpoint` (paid Databricks only).
 
 ## Authoring pipelines with Claude Code
 
